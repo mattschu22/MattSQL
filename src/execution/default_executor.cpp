@@ -514,6 +514,12 @@ private:
       return error_result<ExecutionResult>(ErrorCode::ExecutionError,
                                            "projection requires expressions");
     }
+    if (!plan.projection_names.empty() &&
+        plan.projection_names.size() != plan.projections.size()) {
+      return error_result<ExecutionResult>(
+          ErrorCode::ExecutionError,
+          "projection name count does not match expressions");
+    }
 
     auto input = execute_plan(*plan.children[0]);
     if (!status_ok(input.status)) {
@@ -531,7 +537,11 @@ private:
       }
 
       ColumnSchema column;
-      column.name = projection_name(*projection, index);
+      if (!plan.projection_names.empty() && !plan.projection_names[index].empty()) {
+        column.name = plan.projection_names[index];
+      } else {
+        column.name = projection_name(*projection, index);
+      }
       column.type = projection->type;
       column.id = static_cast<ColumnId>(index);
       output.columns.push_back(column.name);

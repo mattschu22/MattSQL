@@ -134,7 +134,8 @@ TEST_CASE(planner_plans_insert_over_values) {
 /// Verifies filtered SELECT lowers to Projection over Filter over SeqScan.
 TEST_CASE(planner_plans_select_projection_filter_scan) {
   auto catalog = make_catalog();
-  auto bound = bind_sql("SELECT id, name FROM users WHERE active = 1;", catalog);
+  auto bound =
+      bind_sql("SELECT id AS user_id, name FROM users WHERE active = 1;", catalog);
   EXPECT_TRUE(mattsql::status_ok(bound.status));
 
   const auto *bound_select = as<mattsql::BoundSelectStatement>(bound.value->get());
@@ -146,6 +147,9 @@ TEST_CASE(planner_plans_select_projection_filter_scan) {
   const auto *projection = as<mattsql::LogicalProjection>(plan.value->get());
   EXPECT_TRUE(projection->kind == mattsql::LogicalOperatorKind::Projection);
   EXPECT_EQ(projection->projections.size(), 2U);
+  EXPECT_EQ(projection->projection_names.size(), 2U);
+  EXPECT_EQ(projection->projection_names[0], std::string("user_id"));
+  EXPECT_EQ(projection->projection_names[1], std::string(""));
   EXPECT_TRUE(projection->projections[0].get() != bound_select->projections[0].get());
   EXPECT_EQ(projection->children.size(), 1U);
 

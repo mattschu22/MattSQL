@@ -246,12 +246,13 @@ TEST_CASE(executor_creates_inserts_and_selects_rows) {
                              .status));
   EXPECT_EQ(storage.RowCount(table.value->id), 2U);
 
-  const auto result = execute_sql("SELECT id, name FROM users WHERE active = 1;",
-                                  catalog, storage, transaction);
+  const auto result =
+      execute_sql("SELECT id AS user_id, name FROM users WHERE active = 1;", catalog,
+                  storage, transaction);
 
   EXPECT_TRUE(mattsql::status_ok(result.status));
   EXPECT_EQ(result.value->columns.size(), 2U);
-  EXPECT_EQ(result.value->columns[0], std::string("id"));
+  EXPECT_EQ(result.value->columns[0], std::string("user_id"));
   EXPECT_EQ(result.value->columns[1], std::string("name"));
   EXPECT_EQ(result.value->rows.size(), 1U);
   EXPECT_EQ(std::get<std::int64_t>(result.value->rows[0][0]), std::int64_t{1});

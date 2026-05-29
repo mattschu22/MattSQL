@@ -218,6 +218,11 @@ plan_select(const BoundSelectStatement &statement) {
     return error_result<LogicalPlanPtr>(ErrorCode::PlanError,
                                         "SELECT requires at least one projection");
   }
+  if (!statement.projection_names.empty() &&
+      statement.projection_names.size() != statement.projections.size()) {
+    return error_result<LogicalPlanPtr>(
+        ErrorCode::PlanError, "projection name count does not match expressions");
+  }
 
   LogicalPlanPtr source;
   if (!statement.table.name.empty()) {
@@ -262,6 +267,7 @@ plan_select(const BoundSelectStatement &statement) {
   auto projection = std::make_unique<LogicalProjection>();
   projection->kind = LogicalOperatorKind::Projection;
   projection->projections = std::move(*projections.value);
+  projection->projection_names = statement.projection_names;
   projection->children.push_back(std::move(source));
   return ok_result<LogicalPlanPtr>(std::move(projection));
 }

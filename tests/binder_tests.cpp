@@ -177,6 +177,9 @@ TEST_CASE(binder_binds_scalar_select_without_table) {
   EXPECT_TRUE(mattsql::status_ok(result.status));
   const auto *select = as<mattsql::BoundSelectStatement>(result.value->get());
   EXPECT_EQ(select->projections.size(), 2U);
+  EXPECT_EQ(select->projection_names.size(), 2U);
+  EXPECT_EQ(select->projection_names[0], std::string("total"));
+  EXPECT_EQ(select->projection_names[1], std::string(""));
   const auto *sum = as<mattsql::BoundBinaryExpression>(select->projections[0].get());
   EXPECT_TRUE(sum->type == mattsql::SqlType::Integer);
   EXPECT_TRUE(sum->op == mattsql::BinaryOperator::Add);

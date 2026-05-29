@@ -150,12 +150,14 @@ TEST_CASE(physical_planner_plans_select_filter_scan) {
   auto catalog = make_catalog();
 
   const auto physical =
-      physical_plan_sql("SELECT id FROM users WHERE active = 1;", catalog);
+      physical_plan_sql("SELECT id AS user_id FROM users WHERE active = 1;", catalog);
 
   EXPECT_TRUE(mattsql::status_ok(physical.status));
   const auto *projection = as<mattsql::PhysicalProjection>(physical.value->get());
   EXPECT_TRUE(projection->kind == mattsql::PhysicalOperatorKind::Projection);
   EXPECT_EQ(projection->projections.size(), 1U);
+  EXPECT_EQ(projection->projection_names.size(), 1U);
+  EXPECT_EQ(projection->projection_names[0], std::string("user_id"));
   EXPECT_EQ(projection->children.size(), 1U);
 
   const auto *filter = as<mattsql::PhysicalFilter>(projection->children[0].get());

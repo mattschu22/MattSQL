@@ -1,26 +1,15 @@
-#include "mattsql/binder/default_binder.hpp"
-#include "mattsql/catalog/in_memory_catalog.hpp"
+#include "mattsql/common/query_result.hpp"
 #include "mattsql/common/result_utils.hpp"
-#include "mattsql/execution/default_executor.hpp"
-#include "mattsql/lexer/lexer.hpp"
-#include "mattsql/optimizer/default_optimizer.hpp"
-#include "mattsql/parser/parser.hpp"
-#include "mattsql/planner/default_logical_planner.hpp"
-#include "mattsql/planner/default_physical_planner.hpp"
+#include "mattsql/sql_engine.hpp"
 
-#include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <fstream>
 #include <iostream>
-#include <memory>
-#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <utility>
 #include <variant>
-#include <vector>
 
 #if !defined(_WIN32)
 #include <unistd.h>
@@ -28,153 +17,8 @@
 
 namespace {
 
-class CliTransaction final : public mattsql::Transaction {
-public:
-  mattsql::TransactionId Id() const override { return 1; }
-  mattsql::TransactionMode Mode() const override {
-    return mattsql::TransactionMode::ReadWrite;
-  }
-  mattsql::TransactionState State() const override {
-    return mattsql::TransactionState::Active;
-  }
-  mattsql::LogSequenceNumber BeginLsn() const override {
-    return mattsql::LogSequenceNumber{0};
-  }
-};
-
-struct CliTableData {
-  mattsql::TableId table_id = 0;
-  mattsql::PageId root_page_id = mattsql::kInvalidPageId;
-  std::vector<std::vector<std::byte>> records;
-};
-
-class CliHeapCursor final : public mattsql::HeapCursor {
-public:
-  explicit CliHeapCursor(const CliTableData &table) : table_(table) {}
-
-  mattsql::Result<mattsql::RecordView> Next() override {
-    if (index_ >= table_.records.size()) {
-      return mattsql::error_result<mattsql::RecordView>(mattsql::ErrorCode::NotFound,
-                                                        "end of heap scan");
-    }
-
-    const auto &record = table_.records[index_];
-    mattsql::RecordView view;
-    view.id.page_id = table_.root_page_id;
-    view.id.slot_id = static_cast<mattsql::SlotId>(index_);
-    view.bytes = mattsql::ConstBufferView{
-        std::span<const std::byte>(record.data(), record.size())};
-    ++index_;
-    return mattsql::ok_result(view);
-  }
-
-private:
-  const CliTableData &table_;
-  std::size_t index_ = 0;
-};
-
-class CliHeapTable final : public mattsql::HeapTable {
-public:
-  explicit CliHeapTable(CliTableData &table) : table_(table) {}
-
-  mattsql::Result<mattsql::RecordId> Insert(mattsql::Transaction &transaction,
-                                            mattsql::ConstBufferView record) override {
-    (void)transaction;
-
-    std::vector<std::byte> bytes(record.bytes.begin(), record.bytes.end());
-    table_.records.push_back(std::move(bytes));
-
-    mattsql::RecordId id;
-    id.page_id = table_.root_page_id;
-    id.slot_id = static_cast<mattsql::SlotId>(table_.records.size() - 1);
-    return mattsql::ok_result(id);
-  }
-
-  mattsql::Result<mattsql::RecordView> Read(mattsql::Transaction &transaction,
-                                            mattsql::RecordId record_id) override {
-    (void)transaction;
-
-    if (record_id.slot_id >= table_.records.size()) {
-      return mattsql::error_result<mattsql::RecordView>(mattsql::ErrorCode::NotFound,
-                                                        "record not found");
-    }
-
-    const auto &record = table_.records[record_id.slot_id];
-    mattsql::RecordView view;
-    view.id = record_id;
-    view.bytes = mattsql::ConstBufferView{
-        std::span<const std::byte>(record.data(), record.size())};
-    return mattsql::ok_result(view);
-  }
-
-  mattsql::Status Delete(mattsql::Transaction &transaction,
-                         mattsql::RecordId record_id) override {
-    (void)transaction;
-    if (record_id.slot_id >= table_.records.size()) {
-      return mattsql::error_status(mattsql::ErrorCode::NotFound, "record not found");
-    }
-
-    table_.records.erase(table_.records.begin() + record_id.slot_id);
-    return mattsql::ok_status();
-  }
-
-  mattsql::Result<std::unique_ptr<mattsql::HeapCursor>>
-  Scan(mattsql::Transaction &transaction) override {
-    (void)transaction;
-    return mattsql::ok_result<std::unique_ptr<mattsql::HeapCursor>>(
-        std::make_unique<CliHeapCursor>(table_));
-  }
-
-private:
-  CliTableData &table_;
-};
-
-// The CLI keeps heap data in the session so interactive statements can observe
-// previous CREATE and INSERT work until the durable storage layer is available.
-class CliTableStorageManager final : public mattsql::TableStorageManager {
-public:
-  mattsql::Result<mattsql::PageId>
-  CreateHeap(mattsql::Transaction &transaction,
-             const mattsql::TableInfo &table) override {
-    (void)transaction;
-
-    if (tables_.contains(table.id)) {
-      return mattsql::error_result<mattsql::PageId>(mattsql::ErrorCode::AlreadyExists,
-                                                    "heap already exists");
-    }
-
-    CliTableData data;
-    data.table_id = table.id;
-    data.root_page_id = next_root_page_id_++;
-    tables_.emplace(table.id, std::move(data));
-    return mattsql::ok_result(tables_.at(table.id).root_page_id);
-  }
-
-  mattsql::Result<std::unique_ptr<mattsql::HeapTable>>
-  OpenHeap(const mattsql::TableStorageReference &reference) override {
-    const auto table_iter = tables_.find(reference.table_id);
-    if (table_iter == tables_.end()) {
-      return mattsql::error_result<std::unique_ptr<mattsql::HeapTable>>(
-          mattsql::ErrorCode::NotFound, "heap not found");
-    }
-    if (reference.root_page_id != table_iter->second.root_page_id) {
-      return mattsql::error_result<std::unique_ptr<mattsql::HeapTable>>(
-          mattsql::ErrorCode::Corruption, "heap root page mismatch");
-    }
-
-    return mattsql::ok_result<std::unique_ptr<mattsql::HeapTable>>(
-        std::make_unique<CliHeapTable>(table_iter->second));
-  }
-
-private:
-  mattsql::PageId next_root_page_id_ = 1;
-  std::unordered_map<mattsql::TableId, CliTableData> tables_;
-};
-
 struct Session {
-  mattsql::InMemoryCatalog catalog;
-  CliTableStorageManager storage;
-  CliTransaction transaction;
+  mattsql::DefaultSqlEngine engine;
 };
 
 [[nodiscard]] bool stdin_is_tty() {
@@ -199,6 +43,26 @@ struct Session {
   const auto command = trim(value);
   return command == ".exit" || command == ".quit" || command == "exit" ||
          command == "quit";
+}
+
+[[nodiscard]] bool is_sql_file_path(std::string_view value) {
+  if (value.size() < 4) {
+    return false;
+  }
+
+  const auto extension = value.substr(value.size() - 4);
+  return extension[0] == '.' && (extension[1] == 's' || extension[1] == 'S') &&
+         (extension[2] == 'q' || extension[2] == 'Q') &&
+         (extension[3] == 'l' || extension[3] == 'L');
+}
+
+[[nodiscard]] bool all_arguments_are_sql_files(int argc, char **argv) {
+  for (int index = 1; index < argc; ++index) {
+    if (!is_sql_file_path(argv[index])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // Parser currently accepts one statement at a time, so the CLI splits scripts on
@@ -338,42 +202,6 @@ void print_result(const mattsql::QueryResult &result) {
   }
 }
 
-[[nodiscard]] mattsql::Result<mattsql::QueryResult>
-execute_statement(Session &session, const std::string &sql) {
-  mattsql::Lexer lexer(sql);
-  mattsql::Parser parser(lexer.Tokenize());
-  const auto statement = parser.ParseStatement();
-
-  // Main uses the staged interfaces directly instead of the deprecated Engine
-  // wrapper, which keeps the executable aligned with the current architecture.
-  mattsql::DefaultBinder binder;
-  auto bound = binder.Bind(*statement, session.catalog);
-  if (!mattsql::status_ok(bound.status)) {
-    return mattsql::error_result<mattsql::QueryResult>(std::move(bound.status));
-  }
-
-  mattsql::DefaultLogicalPlanner logical_planner;
-  auto logical = logical_planner.Plan(**bound.value);
-  if (!mattsql::status_ok(logical.status)) {
-    return mattsql::error_result<mattsql::QueryResult>(std::move(logical.status));
-  }
-
-  mattsql::DefaultOptimizer optimizer;
-  auto optimized = optimizer.Optimize(std::move(*logical.value));
-  if (!mattsql::status_ok(optimized.status)) {
-    return mattsql::error_result<mattsql::QueryResult>(std::move(optimized.status));
-  }
-
-  mattsql::DefaultPhysicalPlanner physical_planner;
-  auto physical = physical_planner.Plan(**optimized.value);
-  if (!mattsql::status_ok(physical.status)) {
-    return mattsql::error_result<mattsql::QueryResult>(std::move(physical.status));
-  }
-
-  mattsql::DefaultExecutor executor(session.catalog, session.storage);
-  return executor.Execute(**physical.value, session.transaction);
-}
-
 [[nodiscard]] bool run_statement(Session &session, const std::string &sql) {
   const auto trimmed = trim(sql);
   if (trimmed.empty()) {
@@ -381,7 +209,7 @@ execute_statement(Session &session, const std::string &sql) {
   }
 
   try {
-    auto result = execute_statement(session, trimmed);
+    auto result = session.engine.Execute(trimmed);
     if (!mattsql::status_ok(result.status)) {
       std::cerr << "error[" << error_code_name(result.status.code)
                 << "]: " << result.status.message << '\n';
@@ -408,6 +236,23 @@ execute_statement(Session &session, const std::string &sql) {
   }
 
   return success;
+}
+
+[[nodiscard]] bool run_sql_file(Session &session, std::string_view path) {
+  std::ifstream input(std::string(path), std::ios::in | std::ios::binary);
+  if (!input) {
+    std::cerr << "error: unable to open SQL file: " << path << '\n';
+    return false;
+  }
+
+  std::ostringstream sql;
+  sql << input.rdbuf();
+  if (input.bad()) {
+    std::cerr << "error: unable to read SQL file: " << path << '\n';
+    return false;
+  }
+
+  return run_sql_text(session, sql.str());
 }
 
 int run_repl() {
@@ -452,6 +297,14 @@ int main(int argc, char **argv) {
   Session session;
 
   if (argc > 1) {
+    if (all_arguments_are_sql_files(argc, argv)) {
+      bool success = true;
+      for (int index = 1; index < argc; ++index) {
+        success = run_sql_file(session, argv[index]) && success;
+      }
+      return success ? 0 : 1;
+    }
+
     std::ostringstream sql;
     for (int index = 1; index < argc; ++index) {
       if (index != 1) {

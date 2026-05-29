@@ -291,6 +291,11 @@ plan_projection(const LogicalProjection &logical) {
     return error_result<PhysicalPlanPtr>(ErrorCode::PlanError,
                                          "projection requires expressions");
   }
+  if (!logical.projection_names.empty() &&
+      logical.projection_names.size() != logical.projections.size()) {
+    return error_result<PhysicalPlanPtr>(
+        ErrorCode::PlanError, "projection name count does not match expressions");
+  }
 
   auto children = plan_children(logical.children);
   if (!status_ok(children.status)) {
@@ -305,6 +310,7 @@ plan_projection(const LogicalProjection &logical) {
   auto physical = std::make_unique<PhysicalProjection>();
   physical->kind = PhysicalOperatorKind::Projection;
   physical->projections = std::move(*projections.value);
+  physical->projection_names = logical.projection_names;
   physical->children = std::move(*children.value);
   return ok_result<PhysicalPlanPtr>(std::move(physical));
 }

@@ -1,0 +1,47 @@
+# Basic SQL logic coverage over the hosted default engine.
+
+statement ok
+CREATE TABLE users (id INT, name TEXT, active BOOL);
+----
+
+statement ok
+INSERT INTO users VALUES (1, 'Ada', true);
+----
+
+statement ok
+INSERT INTO users VALUES (2, 'Grace', false);
+----
+
+query
+SELECT id AS user_id, name FROM users WHERE active = true;
+----
+user_id\tname
+1\tAda
+
+query
+SELECT name, active FROM users WHERE id = 2;
+----
+name\tactive
+Grace\tfalse
+
+query
+SELECT 1 + 2 AS total, 'Matt''SQL' AS label, false AS flag;
+----
+total\tlabel\tflag
+3\tMatt'SQL\tfalse
+
+statement error AlreadyExists
+CREATE TABLE users (id INT);
+----
+
+statement error NotFound
+SELECT id FROM missing;
+----
+
+statement error TypeMismatch
+SELECT name + 1 FROM users;
+----
+
+statement error ParseError
+DROP TABLE users;
+----

@@ -1,0 +1,37 @@
+# Scalar expression behavior that should stay stable across planner rewrites.
+
+query
+SELECT +5 AS positive, -5 AS negative, NOT false AS negated;
+----
+positive\tnegative\tnegated
+5\t-5\ttrue
+
+query
+SELECT (1 + 2) * 3 AS grouped, 10 / 3 AS quotient, 10 - 4 * 2 AS precedence;
+----
+grouped\tquotient\tprecedence
+9\t3\t2
+
+query
+SELECT 1 = 1 AS eq, 1 <> 2 AS ne, 1 < 2 AS lt, 2 >= 2 AS ge;
+----
+eq\tne\tlt\tge
+true\ttrue\ttrue\ttrue
+
+query
+SELECT 'b' > 'a' AS text_gt, 'a' <= 'a' AS text_le, true AND false OR true AS bool_order;
+----
+text_gt\ttext_le\tbool_order
+true\ttrue\ttrue
+
+statement error ExecutionError
+SELECT 1 / 0 AS broken;
+----
+
+statement error TypeMismatch
+SELECT true + 1;
+----
+
+statement error TypeMismatch
+SELECT NOT 1;
+----

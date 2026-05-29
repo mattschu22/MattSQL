@@ -38,6 +38,7 @@ struct LogicalFilter final : LogicalPlan {
 
 struct LogicalProjection final : LogicalPlan {
   std::vector<BoundExpressionPtr> projections;
+  std::vector<std::string> projection_names;
 };
 
 struct LogicalValues final : LogicalPlan {

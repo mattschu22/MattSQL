@@ -32,13 +32,18 @@ add_library(
   src/binder/default_binder.cpp
   src/catalog/hosted_catalog_api.cpp
   src/catalog/in_memory_catalog.cpp
-  src/engine.cpp
   src/execution/default_executor.cpp
   src/lexer/lexer.cpp
   src/optimizer/default_optimizer.cpp
   src/parser/parser.cpp
   src/planner/default_logical_planner.cpp
   src/planner/default_physical_planner.cpp
+  src/runtime/hosted_platform_runtime.cpp
+  src/sql_engine.cpp
+  src/storage/in_memory_table_storage.cpp
+  src/storage/memory_block_device.cpp
+  src/storage/heap/page_heap_table.cpp
+  src/storage/page/slotted_page.cpp
   src/storage/tuple_codec.cpp
 )
 add_library(MattSQL::core ALIAS mattsql_core)
@@ -62,16 +67,27 @@ if(BUILD_TESTING)
     mattsql_tests
     tests/binder_tests.cpp
     tests/catalog_tests.cpp
-    tests/engine_tests.cpp
     tests/executor_tests.cpp
+    tests/in_memory_table_storage_tests.cpp
     tests/interface_compile_tests.cpp
     tests/lexer_tests.cpp
+    tests/memory_block_device_tests.cpp
     tests/optimizer_tests.cpp
     tests/physical_planner_tests.cpp
     tests/planner_tests.cpp
     tests/parser_tests.cpp
+    tests/page_heap_table_tests.cpp
+    tests/slotted_page_tests.cpp
+    tests/sql_engine_tests.cpp
+    tests/sql_logic_tests.cpp
+    tests/test_main.cpp
   )
   target_link_libraries(mattsql_tests PRIVATE MattSQL::core)
+  target_compile_definitions(
+    mattsql_tests
+    PRIVATE
+      MATTSQL_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+  )
   mattsql_apply_warnings(mattsql_tests)
 
   add_test(NAME mattsql.tests COMMAND mattsql_tests)

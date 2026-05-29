@@ -1,0 +1,57 @@
+# End-to-end error contracts for binding, parsing, and execution failures.
+
+statement ok
+CREATE TABLE users (id INT, name TEXT, active BOOL);
+----
+
+statement error BindError
+CREATE TABLE duplicate_columns (id INT, ID INT);
+----
+
+statement error AlreadyExists
+CREATE TABLE users (id INT);
+----
+
+statement error BindError
+INSERT INTO users VALUES (1);
+----
+
+statement error TypeMismatch
+INSERT INTO users VALUES ('bad', 'Ada', true);
+----
+
+statement error TypeMismatch
+INSERT INTO users VALUES (1, 'Ada', 2);
+----
+
+statement error BindError
+INSERT INTO users VALUES (id, 'Ada', true);
+----
+
+statement error NotFound
+INSERT INTO missing VALUES (1);
+----
+
+statement error BindError
+SELECT id;
+----
+
+statement error BindError
+SELECT *;
+----
+
+statement error TypeMismatch
+SELECT id FROM users WHERE id + 1;
+----
+
+statement error BindError
+SELECT missing FROM users;
+----
+
+statement error BindError
+SELECT other.id FROM users;
+----
+
+statement error ParseError
+CREATE TABLE bad_type (id FLOAT);
+----

@@ -9,34 +9,31 @@
 
 namespace mattsql {
 
-enum class BoundStatementKind {
-    Select,
-    Insert,
-    CreateTable
-};
+enum class BoundStatementKind { Select, Insert, CreateTable };
 
 struct BoundStatement {
-    /// Destroys a bound statement through a base pointer.
-    virtual ~BoundStatement() = default;
+  /// Destroys a bound statement through a base pointer.
+  virtual ~BoundStatement() = default;
 
-    BoundStatementKind kind = BoundStatementKind::Select;
+  BoundStatementKind kind = BoundStatementKind::Select;
 };
 
 using BoundStatementPtr = std::unique_ptr<BoundStatement>;
 
 struct BoundSelectStatement final : BoundStatement {
-    std::vector<BoundExpressionPtr> projections;
-    TableInfo table;
-    BoundExpressionPtr where;
+  std::vector<BoundExpressionPtr> projections;
+  std::vector<std::string> projection_names;
+  TableInfo table;
+  BoundExpressionPtr where;
 };
 
 struct BoundInsertStatement final : BoundStatement {
-    TableInfo table;
-    std::vector<BoundExpressionPtr> values;
+  TableInfo table;
+  std::vector<BoundExpressionPtr> values;
 };
 
 struct BoundCreateTableStatement final : BoundStatement {
-    CreateTableRequest request;
+  CreateTableRequest request;
 };
 
 } // namespace mattsql

@@ -40,6 +40,7 @@ struct PhysicalFilter final : PhysicalPlan {
 
 struct PhysicalProjection final : PhysicalPlan {
   std::vector<BoundExpressionPtr> projections;
+  std::vector<std::string> projection_names;
 };
 
 struct PhysicalValues final : PhysicalPlan {

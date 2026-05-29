@@ -1,0 +1,53 @@
+# Table integration cases covering star expansion, dotted references, NULLs, and empty scans.
+
+statement ok
+CREATE TABLE MixedCase (id INT, name TEXT, active BOOL, score INT);
+----
+
+statement ok
+INSERT INTO mixedcase VALUES (1, 'Ada', true, 10);
+----
+
+statement ok
+INSERT INTO MIXEDCASE VALUES (2, 'Grace', false, 20);
+----
+
+statement ok
+INSERT INTO MixedCase VALUES (3, NULL, true, -4);
+----
+
+query rowsort
+SELECT * FROM mixedcase;
+----
+id\tname\tactive\tscore
+1\tAda\ttrue\t10
+2\tGrace\tfalse\t20
+3\tNULL\ttrue\t-4
+
+query rowsort
+SELECT MixedCase.id AS user_id, name, score + 5 AS shifted FROM mixedcase WHERE MixedCase.active = true;
+----
+user_id\tname\tshifted
+1\tAda\t15
+3\tNULL\t1
+
+query rowsort
+SELECT id, name FROM mixedcase WHERE name = NULL;
+----
+id\tname
+
+query rowsort
+SELECT id AS selected_id FROM mixedcase WHERE active = false OR score < 0;
+----
+selected_id
+2
+3
+
+statement ok
+CREATE TABLE empty_table (id INT, label TEXT);
+----
+
+query rowsort
+SELECT * FROM empty_table;
+----
+id\tlabel

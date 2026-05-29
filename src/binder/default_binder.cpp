@@ -451,6 +451,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
   }
 
   bound->projections.reserve(statement.projections.size());
+  bound->projection_names.reserve(statement.projections.size());
   for (const auto &projection : statement.projections) {
     if (dynamic_cast<const StarExpression *>(projection.expression.get()) != nullptr) {
       if (table == nullptr) {
@@ -462,6 +463,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
       // references with stable catalog identifiers.
       for (const auto &column : table->schema.columns) {
         bound->projections.push_back(make_bound_column(*table, column));
+        bound->projection_names.push_back(column.name);
       }
       continue;
     }
@@ -471,6 +473,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
       return error_result<BoundStatementPtr>(std::move(expression.status));
     }
     bound->projections.push_back(std::move(*expression.value));
+    bound->projection_names.push_back(projection.alias);
   }
 
   if (statement.where != nullptr) {
