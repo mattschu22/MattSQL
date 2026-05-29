@@ -1,0 +1,526 @@
+Bare-Metal SQL Engine and Database-Oriented Operating System
+
+Project Description
+
+This project is an integrated OS/DBMS effort to build a SQL database engine that runs as close to bare metal as practical. The goal is not merely to port a database to a custom kernel, but to explore what a database system can do better when it directly owns the runtime, scheduler, memory manager, storage layout, and I/O path.
+
+The system will use a mixed C++/Rust/C architecture. The SQL engine and most database internals will be implemented in C++ for fast iteration, explicit memory control, and natural expression of database structures such as operators, pages, indexes, buffer frames, and optimizer rules. The database-oriented kernel/runtime will be implemented primarily in Rust where practical, using unsafe code only around hardware-facing boundaries and low-level abstractions. Small amounts of C and assembly will be used for bootstrapping, architecture-specific entry points, interrupt stubs, and compatibility with hardware or bootloader interfaces.
+
+The long-term target is a single-purpose database appliance: a minimal operating environment that boots directly into the SQL engine and exposes only the services the database needs. Instead of implementing a general-purpose POSIX operating system, the project will expose a narrow database-specific runtime API for physical memory allocation, asynchronous block I/O, task scheduling, timers, logging, and eventually networking.
+
+Motivation
+
+General-purpose operating systems provide broad abstractions: processes, filesystems, page cache, virtual memory, preemptive scheduling, sockets, and system calls. These abstractions are useful for general applications, but they often obscure information that a database would prefer to control directly.
+
+A database already implements many OS-like components internally, including:
+
+- Buffer pool management
+- Page replacement
+- Write-ahead logging
+- Crash recovery
+- Query scheduling
+- Background checkpointing
+- Memory arenas
+- Locking and latching
+- I/O batching
+- Worker pools
+- Admission control
+
+This project asks whether a database can be made simpler, more predictable, or faster by moving below the traditional OS boundary and co-designing the database engine with the runtime beneath it.
+
+The main research-style question is:
+
+What can a SQL database do better when it owns the operating environment?
+
+Core Design
+
+The system will be structured as layered components:
+
+1. SQL Layer
+   - Lexer
+   - Parser
+   - AST
+   - Binder
+   - Catalog integration
+   - Logical planning
+   - Physical planning
+   - Query execution
+
+2. Database Storage Layer
+   - Slotted pages
+   - Heap tables
+   - B+ tree indexes
+   - Buffer pool
+   - Page identifiers
+   - Free-space management
+   - Write-ahead log
+   - Checkpoints
+   - Recovery
+
+3. Transaction Layer
+   - Initial single-writer transaction model
+   - Read-only query support
+   - Commit and rollback
+   - WAL-based durability
+   - Later MVCC support
+
+4. Database Runtime Layer
+   - Task abstraction
+   - Cooperative scheduling
+   - Later preemptive scheduling
+   - Asynchronous I/O submission
+   - I/O completion polling
+   - Timers
+   - Memory arenas
+   - Runtime diagnostics
+
+5. Minimal Kernel Layer
+   - Boot path
+   - Serial console
+   - Panic handler
+   - Physical memory manager
+   - Virtual memory setup
+   - Interrupt descriptor table
+   - Timer interrupts
+   - Context switching
+   - Device driver abstractions
+   - Virtio block device support
+   - Later NVMe support
+   - Later networking
+
+6. Hardware or Virtualized Target
+   - QEMU first
+   - x86_64 target
+   - UEFI or Limine boot
+   - virtio-blk for early block I/O
+   - virtio-net or e1000 for later networking
+   - real NVMe support after the storage engine is stable
+
+Language Split
+
+C++ will be used for the database engine.
+
+C++ responsibilities:
+
+- SQL lexer and parser
+- AST and binder
+- Catalog
+- Query planner
+- Query executor
+- Expression evaluation
+- Storage engine
+- Buffer pool
+- B+ tree indexes
+- WAL manager
+- Transaction manager
+- Test harnesses
+- Hosted runtime implementation for Linux/macOS
+
+C++ constraints:
+
+- Use C++20 or newer
+- Avoid exceptions in core runtime and storage code
+- Avoid RTTI in low-level components
+- Use RAII for resource ownership where appropriate
+- Use explicit ownership types for pages, pins, latches, and I/O handles
+- Avoid uncontrolled heap allocation in hot paths
+- Use sanitizers, fuzzing, and deterministic crash tests in hosted mode
+- Keep all OS interaction behind a platform/runtime interface
+
+Rust will be used for the database-oriented kernel and runtime where practical.
+
+Rust responsibilities:
+
+- Kernel initialization after boot
+- Physical page allocator
+- Virtual memory abstractions
+- Interrupt-safe data structures
+- Task scheduler
+- Device abstraction layer
+- Virtio block driver
+- Safe wrappers around unsafe hardware queues
+- Runtime services exposed to the C++ database layer
+
+Rust constraints:
+
+- Use no_std for kernel-side code
+- Keep unsafe code small and isolated
+- Do not panic across FFI boundaries
+- Use explicit ownership rules for memory passed to C++
+- Provide stable C ABI interfaces where needed
+- Treat Rust as the owner of hardware resources and physical memory
+
+C and assembly will be used only where they are the simplest or most appropriate tools.
+
+C/assembly responsibilities:
+
+- Boot stubs
+- Architecture entry points
+- Context-switching assembly if needed
+- Interrupt/trap entry stubs
+- Minimal ABI glue
+- Interfacing with bootloader-provided structures
+
+The preferred ownership model is:
+
+- Rust owns the kernel, devices, physical memory, and low-level runtime.
+- C++ owns the SQL engine and database data structures.
+- C/assembly owns only the unavoidable architecture-specific boundary.
+- Memory crossing the Rust/C++ boundary must use simple pointer-plus-length structures and explicit lifetime rules.
+- No C++ exceptions or Rust panics may cross the FFI boundary.
+
+Platform Interface
+
+The database should not call POSIX APIs directly. Instead, all runtime interaction should go through a narrow platform interface.
+
+Example services:
+
+- Allocate physical or runtime-managed pages
+- Free pages
+- Submit asynchronous reads
+- Submit asynchronous writes
+- Flush storage ranges
+- Poll I/O completion
+- Spawn runtime tasks
+- Yield execution
+- Pin tasks to cores
+- Read monotonic time
+- Emit diagnostic logs
+- Panic or abort with structured debug information
+
+This interface allows the same database engine to run in multiple environments:
+
+1. Hosted mode on Linux/macOS
+2. Simulated bare-metal mode with deterministic crash testing
+3. QEMU bare-metal mode
+4. Real hardware mode
+
+Development Strategy
+
+The project should not begin by writing the full operating system. It should begin with the database engine running in hosted mode behind a strict runtime abstraction. The OS then becomes another backend for the same interface.
+
+Phase 1: Hosted Database Engine
+
+Build the database on Linux/macOS first.
+
+Goals:
+
+- SQL lexer
+- SQL parser
+- AST
+- Basic catalog
+- In-memory tables
+- Simple SELECT, INSERT, CREATE TABLE
+- Volcano-style iterator executor
+- Unit tests
+- Parser tests
+- Basic sqllogictest-style integration tests
+
+The key rule is that the database must not directly depend on the host OS except through the runtime interface.
+
+Phase 2: Storage Engine and Crash Simulation
+
+Add persistent storage using a fake block device backed by a file.
+
+Goals:
+
+- Fixed-size pages
+- Slotted page format
+- Heap table storage
+- Buffer pool
+- Page pinning
+- Dirty-page tracking
+- Write-ahead log
+- Checkpointing
+- Recovery
+- Deterministic crash simulation
+- Randomized write-reordering tests
+
+The crash simulator should be able to crash the system after any storage write and verify recovery invariants.
+
+Phase 3: Database Runtime
+
+Build a database-specific runtime in hosted mode.
+
+Goals:
+
+- Cooperative task scheduler
+- Async I/O abstraction
+- I/O completion polling
+- Query tasks
+- Background checkpoint task
+- WAL flush task
+- Buffer eviction task
+- Basic priority scheduling
+- Runtime tracing and observability
+
+This phase defines the scheduling model before the system moves to bare metal.
+
+Phase 4: Minimal Kernel
+
+Build the first bare-metal runtime.
+
+Goals:
+
+- Boot in QEMU
+- Serial logging
+- Panic handling
+- Physical memory allocation
+- Virtual memory setup
+- Basic heap allocator
+- Timer interrupt
+- Cooperative scheduling
+- Virtio block driver
+- Runtime API exposed to the C++ database
+- Boot directly into the database shell or test runner
+
+The first bare-metal target should not implement networking or a general filesystem. The database should use a raw block-device layout.
+
+Phase 5: Raw Database Storage Layout
+
+Replace file-backed storage with a database-managed disk layout.
+
+Example layout:
+
+- Superblock
+- Catalog region
+- WAL region
+- Page map
+- Free-space map
+- Table and index extents
+
+Goals:
+
+- Database owns block allocation
+- Database owns persistence format
+- No general-purpose filesystem required
+- WAL and checkpoint behavior are explicitly controlled
+- Recovery works after simulated and QEMU-level crashes
+
+Phase 6: Networking and Client Protocol
+
+Add external access after local shell and storage are stable.
+
+Options:
+
+- Minimal custom binary protocol
+- Simple text protocol
+- Subset of PostgreSQL wire protocol
+
+The first version should use a custom protocol to avoid compatibility complexity.
+
+Phase 7: Performance and Research Experiments
+
+Use the system to evaluate OS/DB co-design questions.
+
+Possible experiments:
+
+- Database-aware scheduling vs general-purpose scheduling
+- Raw block access vs host filesystem
+- Database-managed buffer pool vs OS page cache
+- WAL-aware I/O ordering
+- Query-priority-aware scheduling
+- Core partitioning for OLTP-style workloads
+- Tail latency under checkpoint pressure
+- Recovery time after forced crashes
+- Write amplification under different checkpoint strategies
+- Effect of direct device control on p50, p95, and p99 latency
+
+Initial Feature Scope
+
+The first complete version should support:
+
+- CREATE TABLE
+- INSERT
+- SELECT
+- Simple WHERE predicates
+- Projection
+- Sequential scan
+- Basic expression evaluation
+- Integer and string types
+- Heap table storage
+- Buffer pool
+- Single-writer transactions
+- WAL durability
+- Crash recovery
+- QEMU boot
+- Raw block-device persistence
+
+Features to defer:
+
+- Full SQL compatibility
+- Joins
+- Aggregation
+- MVCC
+- Cost-based optimization
+- PostgreSQL wire compatibility
+- General-purpose filesystem
+- Process isolation
+- User accounts and permissions
+- Demand paging
+- Multi-tenant security
+- Distributed execution
+- JIT compilation
+
+Testing Strategy
+
+Testing should be treated as a first-class component.
+
+Hosted tests:
+
+- Unit tests for lexer, parser, catalog, storage, and executor
+- Fuzz tests for parser and page formats
+- Property tests for B+ tree operations
+- Sanitizer builds
+- AddressSanitizer
+- UndefinedBehaviorSanitizer
+- ThreadSanitizer where applicable
+
+Crash tests:
+
+- Crash after every WAL write
+- Crash after every data-page write
+- Crash during checkpoint
+- Crash during transaction commit
+- Crash during page eviction
+- Crash during catalog update
+- Verify recovery invariants after every crash point
+
+Bare-metal tests:
+
+- QEMU boot tests
+- Serial-output test harness
+- Block-device read/write tests
+- Allocator tests
+- Scheduler tests
+- Database smoke tests
+- Recovery tests using persisted QEMU disk images
+
+Debugging and Tooling
+
+The project should include serious debugging infrastructure from the start.
+
+Useful tools:
+
+- QEMU
+- GDB or LLDB
+- Serial logging
+- Structured panic reports
+- Page inspectors
+- WAL inspectors
+- Disk image inspection tools
+- Runtime trace dumps
+- Deterministic replay where practical
+- Hosted sanitizer builds
+- CI for hosted tests
+- Scripted QEMU test runs
+
+Repository Structure
+
+A possible repository layout:
+
+dbos/
+  CMakeLists.txt
+  README.md
+
+  db/
+    sql/
+      lexer/
+      parser/
+      ast/
+      binder/
+    catalog/
+    optimizer/
+    execution/
+      operators/
+      expressions/
+    storage/
+      page/
+      heap/
+      btree/
+      buffer/
+      wal/
+    txn/
+    runtime/
+      platform.hpp
+      hosted/
+      baremetal_ffi/
+
+  kernel/
+    Cargo.toml
+    src/
+      arch/
+        x86_64/
+      boot/
+      memory/
+      interrupts/
+      scheduler/
+      drivers/
+        virtio/
+        nvme/
+      runtime_api/
+      panic.rs
+
+  abi/
+    dbos_abi.h
+
+  tests/
+    unit/
+    integration/
+    crash/
+    fuzz/
+    qemu/
+
+  tools/
+    disk_image/
+    inspect_pages/
+    inspect_wal/
+    qemu_runner/
+
+  docs/
+    architecture.md
+    storage_format.md
+    runtime_api.md
+    recovery.md
+    testing.md
+
+Main Engineering Risks
+
+The biggest risk is scope explosion. Building a SQL engine and an OS are both large projects. The only viable approach is to keep the boundary narrow and avoid general-purpose OS features.
+
+Major risks:
+
+- Spending too much time on the kernel before the database exists
+- Accidentally reimplementing POSIX
+- Building a filesystem instead of a database storage layout
+- Debugging real hardware too early
+- Designing an FFI boundary that is too complex
+- Allowing C++ exceptions or Rust panics to cross language boundaries
+- Implementing networking too early
+- Skipping crash testing
+- Building advanced SQL features before storage correctness is stable
+
+The project should optimize for vertical slices:
+
+1. Boot or launch
+2. Create table
+3. Insert row
+4. Persist row
+5. Crash
+6. Recover
+7. Select row
+
+That vertical slice is more valuable than a broad but shallow SQL implementation.
+
+Expected Outcome
+
+The expected result is a small but coherent database operating system:
+
+- A C++ SQL engine
+- A Rust-based minimal database runtime/kernel
+- A raw block-device storage format
+- WAL-based recovery
+- A QEMU-bootable image
+- Hosted and bare-metal runtime backends
+- Crash testing infrastructure
+- Benchmarks comparing hosted and bare-metal behavior
