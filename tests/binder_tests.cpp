@@ -1,5 +1,6 @@
 #include "mattsql/binder/default_binder.hpp"
 #include "mattsql/catalog/in_memory_catalog.hpp"
+#include "mattsql/common/result_utils.hpp"
 #include "mattsql/lexer/lexer.hpp"
 #include "mattsql/parser/parser.hpp"
 
@@ -11,8 +12,6 @@
 #include <variant>
 
 namespace {
-
-bool ok(const mattsql::Status &status) { return status.code == mattsql::ErrorCode::Ok; }
 
 mattsql::StatementPtr parse_statement(const std::string &sql) {
   mattsql::Lexer lexer(sql);
@@ -38,7 +37,7 @@ mattsql::CreateTableRequest users_request() {
 mattsql::InMemoryCatalog make_catalog() {
   mattsql::InMemoryCatalog catalog;
   const auto created = catalog.CreateTable(users_request());
-  EXPECT_TRUE(ok(created.status));
+  EXPECT_TRUE(mattsql::status_ok(created.status));
   return catalog;
 }
 
@@ -58,7 +57,7 @@ TEST_CASE(binder_binds_create_table_request) {
   const auto result =
       bind_sql("CREATE TABLE projects (id INT, name TEXT, active BOOL);", catalog);
 
-  EXPECT_TRUE(ok(result.status));
+  EXPECT_TRUE(mattsql::status_ok(result.status));
   const auto *create = as<mattsql::BoundCreateTableStatement>(result.value->get());
   EXPECT_TRUE(create->kind == mattsql::BoundStatementKind::CreateTable);
   EXPECT_EQ(create->request.name, std::string("projects"));
@@ -78,7 +77,7 @@ TEST_CASE(binder_binds_insert_values_against_table_schema) {
 
   const auto result = bind_sql("INSERT INTO users VALUES (1, 'Ada', 1);", catalog);
 
-  EXPECT_TRUE(ok(result.status));
+  EXPECT_TRUE(mattsql::status_ok(result.status));
   const auto *insert = as<mattsql::BoundInsertStatement>(result.value->get());
   EXPECT_TRUE(insert->kind == mattsql::BoundStatementKind::Insert);
   EXPECT_EQ(insert->table.id, mattsql::TableId{1});
@@ -104,7 +103,7 @@ TEST_CASE(binder_binds_select_columns_and_where_predicate) {
   const auto result =
       bind_sql("SELECT users.id, name FROM USERS WHERE active = 1;", catalog);
 
-  EXPECT_TRUE(ok(result.status));
+  EXPECT_TRUE(mattsql::status_ok(result.status));
   const auto *select = as<mattsql::BoundSelectStatement>(result.value->get());
   EXPECT_TRUE(select->kind == mattsql::BoundStatementKind::Select);
   EXPECT_EQ(select->table.name, std::string("users"));
@@ -133,7 +132,7 @@ TEST_CASE(binder_expands_select_star) {
 
   const auto result = bind_sql("SELECT * FROM users;", catalog);
 
-  EXPECT_TRUE(ok(result.status));
+  EXPECT_TRUE(mattsql::status_ok(result.status));
   const auto *select = as<mattsql::BoundSelectStatement>(result.value->get());
   EXPECT_EQ(select->projections.size(), 3U);
   EXPECT_EQ(
@@ -153,7 +152,7 @@ TEST_CASE(binder_binds_scalar_select_without_table) {
 
   const auto result = bind_sql("SELECT 1 + 2 AS total, 'x';", catalog);
 
-  EXPECT_TRUE(ok(result.status));
+  EXPECT_TRUE(mattsql::status_ok(result.status));
   const auto *select = as<mattsql::BoundSelectStatement>(result.value->get());
   EXPECT_EQ(select->projections.size(), 2U);
   const auto *sum = as<mattsql::BoundBinaryExpression>(select->projections[0].get());

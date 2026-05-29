@@ -12,6 +12,9 @@ TEST_CASE(sql_engine_interfaces_are_self_contained) {
   static_assert(std::is_enum_v<mattsql::PhysicalOperatorKind>);
   static_assert(std::is_enum_v<mattsql::TransactionState>);
   static_assert(std::is_base_of_v<mattsql::Binder, mattsql::DefaultBinder>);
+  static_assert(
+      std::is_base_of_v<mattsql::LogicalPlanner, mattsql::DefaultLogicalPlanner>);
+  static_assert(std::is_base_of_v<mattsql::Optimizer, mattsql::DefaultOptimizer>);
   static_assert(std::variant_size_v<mattsql::Value> == 4);
   static_assert(std::is_default_constructible_v<mattsql::TupleBatch>);
   static_assert(std::is_default_constructible_v<mattsql::VectorBatch>);

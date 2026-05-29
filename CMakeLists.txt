@@ -34,7 +34,9 @@ add_library(
   src/catalog/in_memory_catalog.cpp
   src/engine.cpp
   src/lexer/lexer.cpp
+  src/optimizer/default_optimizer.cpp
   src/parser/parser.cpp
+  src/planner/default_logical_planner.cpp
 )
 add_library(MattSQL::core ALIAS mattsql_core)
 
@@ -60,6 +62,8 @@ if(BUILD_TESTING)
     tests/engine_tests.cpp
     tests/interface_compile_tests.cpp
     tests/lexer_tests.cpp
+    tests/optimizer_tests.cpp
+    tests/planner_tests.cpp
     tests/parser_tests.cpp
   )
   target_link_libraries(mattsql_tests PRIVATE MattSQL::core)

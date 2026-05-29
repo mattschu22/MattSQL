@@ -1,5 +1,7 @@
 #include "mattsql/catalog/in_memory_catalog.hpp"
 
+#include "mattsql/common/result_utils.hpp"
+
 #include "test_framework.hpp"
 
 #include <memory>
@@ -10,7 +12,8 @@
 
 namespace {
 
-bool ok(const mattsql::Status &status) { return status.code == mattsql::ErrorCode::Ok; }
+using mattsql::error_result;
+using mattsql::ok_result;
 
 mattsql::TableSchema user_schema() {
   mattsql::TableSchema schema;
@@ -135,19 +138,6 @@ public:
     return ok_result(index_iter->second);
   }
 
-  template <typename T> static mattsql::Result<T> ok_result(T value) {
-    mattsql::Result<T> result;
-    result.value.emplace(std::move(value));
-    return result;
-  }
-
-  template <typename T>
-  static mattsql::Result<T> error_result(mattsql::ErrorCode code, std::string message) {
-    mattsql::Result<T> result;
-    result.status = {code, std::move(message)};
-    return result;
-  }
-
   mutable int load_table_by_name_calls = 0;
   mutable int load_table_by_id_calls = 0;
   mutable int load_tables_calls = 0;
@@ -182,7 +172,7 @@ TEST_CASE(catalog_creates_gets_lists_and_drops_tables) {
 
   const auto created = catalog.CreateTable({"users", user_schema()});
 
-  EXPECT_TRUE(ok(created.status));
+  EXPECT_TRUE(mattsql::status_ok(created.status));
   EXPECT_TRUE(created.value.has_value());
   EXPECT_EQ(created.value->id, mattsql::TableId{1});
   EXPECT_EQ(created.value->name, std::string("users"));
@@ -193,25 +183,25 @@ TEST_CASE(catalog_creates_gets_lists_and_drops_tables) {
   EXPECT_TRUE(!created.value->schema.columns[0].nullable);
 
   const auto by_name = catalog.GetTable("USERS");
-  EXPECT_TRUE(ok(by_name.status));
+  EXPECT_TRUE(mattsql::status_ok(by_name.status));
   EXPECT_EQ(by_name.value->id, created.value->id);
 
   const auto by_id = catalog.GetTable(created.value->id);
-  EXPECT_TRUE(ok(by_id.status));
+  EXPECT_TRUE(mattsql::status_ok(by_id.status));
   EXPECT_EQ(by_id.value->name, std::string("users"));
 
   const auto listed = catalog.ListTables();
-  EXPECT_TRUE(ok(listed.status));
+  EXPECT_TRUE(mattsql::status_ok(listed.status));
   EXPECT_EQ(listed.value->size(), 1U);
   EXPECT_EQ((*listed.value)[0].id, created.value->id);
 
-  EXPECT_TRUE(ok(catalog.DropTable("Users")));
+  EXPECT_TRUE(mattsql::status_ok(catalog.DropTable("Users")));
   EXPECT_TRUE(catalog.GetTable("users").status.code == mattsql::ErrorCode::NotFound);
   EXPECT_TRUE(catalog.GetTable(created.value->id).status.code ==
               mattsql::ErrorCode::NotFound);
 
   const auto recreated = catalog.CreateTable({"users", user_schema()});
-  EXPECT_TRUE(ok(recreated.status));
+  EXPECT_TRUE(mattsql::status_ok(recreated.status));
   EXPECT_EQ(recreated.value->id, mattsql::TableId{2});
 }
 
@@ -241,14 +231,14 @@ TEST_CASE(catalog_rejects_invalid_table_requests) {
       mattsql::ErrorCode::AlreadyExists);
 
   const auto users = catalog.CreateTable({"users", user_schema()});
-  EXPECT_TRUE(ok(users.status));
+  EXPECT_TRUE(mattsql::status_ok(users.status));
   EXPECT_EQ(users.value->id, mattsql::TableId{1});
   EXPECT_TRUE(catalog.CreateTable({"USERS", user_schema()}).status.code ==
               mattsql::ErrorCode::AlreadyExists);
   EXPECT_TRUE(catalog.DropTable("missing").code == mattsql::ErrorCode::NotFound);
 
   const auto first_valid = catalog.CreateTable({"first_valid", user_schema()});
-  EXPECT_TRUE(ok(first_valid.status));
+  EXPECT_TRUE(mattsql::status_ok(first_valid.status));
   EXPECT_EQ(first_valid.value->id, mattsql::TableId{2});
 }
 
@@ -256,7 +246,7 @@ TEST_CASE(catalog_rejects_invalid_table_requests) {
 TEST_CASE(catalog_creates_and_gets_indexes) {
   mattsql::InMemoryCatalog catalog;
   const auto table = catalog.CreateTable({"users", user_schema()});
-  EXPECT_TRUE(ok(table.status));
+  EXPECT_TRUE(mattsql::status_ok(table.status));
 
   mattsql::CreateIndexRequest request;
   request.table_name = "USERS";
@@ -265,22 +255,22 @@ TEST_CASE(catalog_creates_and_gets_indexes) {
   request.schema.unique = true;
 
   const auto created = catalog.CreateIndex(request);
-  EXPECT_TRUE(ok(created.status));
+  EXPECT_TRUE(mattsql::status_ok(created.status));
   EXPECT_EQ(created.value->id, mattsql::IndexId{1});
   EXPECT_EQ(created.value->table_id, table.value->id);
   EXPECT_EQ(created.value->name, std::string("users_id_idx"));
   EXPECT_TRUE(created.value->schema.unique);
 
   const auto found = catalog.GetIndex("users", "USERS_ID_IDX");
-  EXPECT_TRUE(ok(found.status));
+  EXPECT_TRUE(mattsql::status_ok(found.status));
   EXPECT_EQ(found.value->id, created.value->id);
 
   const auto refreshed_table = catalog.GetTable("users");
-  EXPECT_TRUE(ok(refreshed_table.status));
+  EXPECT_TRUE(mattsql::status_ok(refreshed_table.status));
   EXPECT_EQ(refreshed_table.value->indexes.size(), 1U);
   EXPECT_EQ(refreshed_table.value->indexes[0].id, created.value->id);
 
-  EXPECT_TRUE(ok(catalog.DropTable("users")));
+  EXPECT_TRUE(mattsql::status_ok(catalog.DropTable("users")));
   EXPECT_TRUE(catalog.GetIndex("users", "users_id_idx").status.code ==
               mattsql::ErrorCode::NotFound);
 }
@@ -288,13 +278,13 @@ TEST_CASE(catalog_creates_and_gets_indexes) {
 /// Verifies invalid index definitions and missing objects are rejected.
 TEST_CASE(catalog_rejects_invalid_index_requests) {
   mattsql::InMemoryCatalog catalog;
-  EXPECT_TRUE(ok(catalog.CreateTable({"users", user_schema()}).status));
+  EXPECT_TRUE(mattsql::status_ok(catalog.CreateTable({"users", user_schema()}).status));
 
   mattsql::CreateIndexRequest request;
   request.table_name = "users";
   request.schema.name = "users_id_idx";
   request.schema.key_columns.push_back(0);
-  EXPECT_TRUE(ok(catalog.CreateIndex(request).status));
+  EXPECT_TRUE(mattsql::status_ok(catalog.CreateIndex(request).status));
 
   EXPECT_TRUE(catalog.CreateIndex(request).status.code ==
               mattsql::ErrorCode::AlreadyExists);
@@ -344,12 +334,14 @@ TEST_CASE(catalog_rejects_invalid_index_requests) {
 TEST_CASE(catalog_lists_tables_in_creation_order) {
   mattsql::InMemoryCatalog catalog;
 
-  EXPECT_TRUE(ok(catalog.CreateTable({"users", user_schema()}).status));
-  EXPECT_TRUE(ok(catalog.CreateTable({"projects", user_schema()}).status));
-  EXPECT_TRUE(ok(catalog.CreateTable({"events", user_schema()}).status));
+  EXPECT_TRUE(mattsql::status_ok(catalog.CreateTable({"users", user_schema()}).status));
+  EXPECT_TRUE(
+      mattsql::status_ok(catalog.CreateTable({"projects", user_schema()}).status));
+  EXPECT_TRUE(
+      mattsql::status_ok(catalog.CreateTable({"events", user_schema()}).status));
 
   const auto listed = catalog.ListTables();
-  EXPECT_TRUE(ok(listed.status));
+  EXPECT_TRUE(mattsql::status_ok(listed.status));
   EXPECT_EQ(listed.value->size(), 3U);
   EXPECT_EQ((*listed.value)[0].name, std::string("users"));
   EXPECT_EQ((*listed.value)[1].name, std::string("projects"));
@@ -361,25 +353,25 @@ TEST_CASE(hosted_catalog_api_stores_tables_and_indexes) {
   mattsql::InMemoryHostedCatalogApi api;
 
   const auto table_id = api.AllocateTableId();
-  EXPECT_TRUE(ok(table_id.status));
+  EXPECT_TRUE(mattsql::status_ok(table_id.status));
   EXPECT_EQ(*table_id.value, mattsql::TableId{1});
 
   mattsql::TableInfo table;
   table.id = *table_id.value;
   table.name = "users";
   table.schema = user_schema();
-  EXPECT_TRUE(ok(api.StoreTable("users", table).status));
+  EXPECT_TRUE(mattsql::status_ok(api.StoreTable("users", table).status));
 
   const auto by_name = api.LoadTable("users");
-  EXPECT_TRUE(ok(by_name.status));
+  EXPECT_TRUE(mattsql::status_ok(by_name.status));
   EXPECT_EQ(by_name.value->id, table.id);
 
   const auto by_id = api.LoadTable(table.id);
-  EXPECT_TRUE(ok(by_id.status));
+  EXPECT_TRUE(mattsql::status_ok(by_id.status));
   EXPECT_EQ(by_id.value->name, std::string("users"));
 
   const auto index_id = api.AllocateIndexId();
-  EXPECT_TRUE(ok(index_id.status));
+  EXPECT_TRUE(mattsql::status_ok(index_id.status));
   EXPECT_EQ(*index_id.value, mattsql::IndexId{1});
 
   mattsql::IndexInfo index;
@@ -388,18 +380,19 @@ TEST_CASE(hosted_catalog_api_stores_tables_and_indexes) {
   index.table_id = table.id;
   index.schema.name = "users_id_idx";
   index.schema.key_columns.push_back(0);
-  EXPECT_TRUE(ok(api.StoreIndex("users", "users_id_idx", index).status));
+  EXPECT_TRUE(
+      mattsql::status_ok(api.StoreIndex("users", "users_id_idx", index).status));
 
   const auto found_index = api.LoadIndex("users", "users_id_idx");
-  EXPECT_TRUE(ok(found_index.status));
+  EXPECT_TRUE(mattsql::status_ok(found_index.status));
   EXPECT_EQ(found_index.value->id, index.id);
 
   const auto listed = api.LoadTables();
-  EXPECT_TRUE(ok(listed.status));
+  EXPECT_TRUE(mattsql::status_ok(listed.status));
   EXPECT_EQ(listed.value->size(), 1U);
   EXPECT_EQ((*listed.value)[0].indexes.size(), 1U);
 
-  EXPECT_TRUE(ok(api.EraseTable("users")));
+  EXPECT_TRUE(mattsql::status_ok(api.EraseTable("users")));
   EXPECT_TRUE(api.LoadTable("users").status.code == mattsql::ErrorCode::NotFound);
   EXPECT_TRUE(api.LoadIndex("users", "users_id_idx").status.code ==
               mattsql::ErrorCode::NotFound);
@@ -413,7 +406,7 @@ TEST_CASE(hosted_catalog_api_rejects_invalid_operations) {
   table.id = 1;
   table.name = "users";
   table.schema = user_schema();
-  EXPECT_TRUE(ok(api.StoreTable("users", table).status));
+  EXPECT_TRUE(mattsql::status_ok(api.StoreTable("users", table).status));
   EXPECT_TRUE(api.StoreTable("users", table).status.code ==
               mattsql::ErrorCode::AlreadyExists);
   EXPECT_TRUE(api.LoadTable("missing").status.code == mattsql::ErrorCode::NotFound);
@@ -425,7 +418,8 @@ TEST_CASE(hosted_catalog_api_rejects_invalid_operations) {
   index.id = 1;
   index.name = "users_id_idx";
   index.table_id = 1;
-  EXPECT_TRUE(ok(api.StoreIndex("users", "users_id_idx", index).status));
+  EXPECT_TRUE(
+      mattsql::status_ok(api.StoreIndex("users", "users_id_idx", index).status));
   EXPECT_TRUE(api.StoreIndex("users", "users_id_idx", index).status.code ==
               mattsql::ErrorCode::AlreadyExists);
   EXPECT_TRUE(api.StoreIndex("missing", "idx", index).status.code ==
@@ -441,7 +435,7 @@ TEST_CASE(catalog_uses_mock_hosted_api) {
   mattsql::InMemoryCatalog catalog(std::move(mock));
 
   const auto created = catalog.CreateTable({"Users", user_schema()});
-  EXPECT_TRUE(ok(created.status));
+  EXPECT_TRUE(mattsql::status_ok(created.status));
   EXPECT_EQ(created.value->id, mattsql::TableId{100});
   EXPECT_EQ(api->load_table_by_name_calls, 1);
   EXPECT_EQ(api->allocate_table_id_calls, 1);
@@ -449,7 +443,7 @@ TEST_CASE(catalog_uses_mock_hosted_api) {
   EXPECT_EQ(api->last_table_key, std::string("users"));
 
   const auto by_name = catalog.GetTable("USERS");
-  EXPECT_TRUE(ok(by_name.status));
+  EXPECT_TRUE(mattsql::status_ok(by_name.status));
   EXPECT_EQ(by_name.value->id, created.value->id);
   EXPECT_EQ(api->last_table_key, std::string("users"));
 
@@ -458,7 +452,7 @@ TEST_CASE(catalog_uses_mock_hosted_api) {
   request.schema.name = "Users_ID_Idx";
   request.schema.key_columns.push_back(0);
   const auto index = catalog.CreateIndex(request);
-  EXPECT_TRUE(ok(index.status));
+  EXPECT_TRUE(mattsql::status_ok(index.status));
   EXPECT_EQ(index.value->id, mattsql::IndexId{500});
   EXPECT_EQ(api->allocate_index_id_calls, 1);
   EXPECT_EQ(api->store_index_calls, 1);
@@ -499,7 +493,8 @@ TEST_CASE(catalog_propagates_mock_hosted_api_errors) {
     auto mock = std::make_unique<MockHostedCatalogApi>();
     auto *api = mock.get();
     mattsql::InMemoryCatalog catalog(std::move(mock));
-    EXPECT_TRUE(ok(catalog.CreateTable({"users", user_schema()}).status));
+    EXPECT_TRUE(
+        mattsql::status_ok(catalog.CreateTable({"users", user_schema()}).status));
     api->fail_allocate_index_id = true;
 
     mattsql::CreateIndexRequest request;
@@ -514,7 +509,8 @@ TEST_CASE(catalog_propagates_mock_hosted_api_errors) {
     auto mock = std::make_unique<MockHostedCatalogApi>();
     auto *api = mock.get();
     mattsql::InMemoryCatalog catalog(std::move(mock));
-    EXPECT_TRUE(ok(catalog.CreateTable({"users", user_schema()}).status));
+    EXPECT_TRUE(
+        mattsql::status_ok(catalog.CreateTable({"users", user_schema()}).status));
     api->fail_store_index = true;
 
     mattsql::CreateIndexRequest request;

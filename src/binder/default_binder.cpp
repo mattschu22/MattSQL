@@ -1,5 +1,7 @@
 #include "mattsql/binder/default_binder.hpp"
 
+#include "mattsql/common/result_utils.hpp"
+
 #include <cctype>
 #include <cstdint>
 #include <limits>
@@ -12,29 +14,6 @@
 
 namespace mattsql {
 namespace {
-
-[[nodiscard]] bool ok(const Status &status) { return status.code == ErrorCode::Ok; }
-
-[[nodiscard]] Status error_status(ErrorCode code, std::string message) {
-  return Status{code, std::move(message)};
-}
-
-template <typename T> [[nodiscard]] Result<T> ok_result(T value) {
-  Result<T> result;
-  result.value.emplace(std::move(value));
-  return result;
-}
-
-template <typename T> [[nodiscard]] Result<T> error_result(Status status) {
-  Result<T> result;
-  result.status = std::move(status);
-  return result;
-}
-
-template <typename T>
-[[nodiscard]] Result<T> error_result(ErrorCode code, std::string message) {
-  return error_result<T>(error_status(code, std::move(message)));
-}
 
 [[nodiscard]] std::string lowercase_key(std::string_view value) {
   std::string key;
@@ -93,7 +72,7 @@ struct ColumnNameParts {
 [[nodiscard]] Result<ColumnSchema> resolve_column(const TableInfo &table,
                                                   std::string_view name) {
   auto parts = split_column_name(name);
-  if (!ok(parts.status)) {
+  if (!status_ok(parts.status)) {
     return error_result<ColumnSchema>(std::move(parts.status));
   }
 
@@ -239,7 +218,7 @@ struct ColumnNameParts {
   }
 
   auto column = resolve_column(*table, expression.name);
-  if (!ok(column.status)) {
+  if (!status_ok(column.status)) {
     return error_result<BoundExpressionPtr>(std::move(column.status));
   }
 
@@ -249,7 +228,7 @@ struct ColumnNameParts {
 [[nodiscard]] Result<BoundExpressionPtr> bind_unary(const UnaryExpression &expression,
                                                     const TableInfo *table) {
   auto operand = bind_expression(*expression.operand, table);
-  if (!ok(operand.status)) {
+  if (!status_ok(operand.status)) {
     return operand;
   }
 
@@ -283,12 +262,12 @@ struct ColumnNameParts {
 [[nodiscard]] Result<BoundExpressionPtr> bind_binary(const BinaryExpression &expression,
                                                      const TableInfo *table) {
   auto left = bind_expression(*expression.left, table);
-  if (!ok(left.status)) {
+  if (!status_ok(left.status)) {
     return left;
   }
 
   auto right = bind_expression(*expression.right, table);
-  if (!ok(right.status)) {
+  if (!status_ok(right.status)) {
     return right;
   }
 
@@ -374,7 +353,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
   }
 
   const auto existing = catalog.GetTable(statement.table_name);
-  if (ok(existing.status)) {
+  if (status_ok(existing.status)) {
     return error_result<BoundStatementPtr>(ErrorCode::AlreadyExists,
                                            "table already exists");
   }
@@ -421,7 +400,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
 [[nodiscard]] Result<BoundStatementPtr> bind_insert(const InsertStatement &statement,
                                                     Catalog &catalog) {
   const auto table = catalog.GetTable(statement.table_name);
-  if (!ok(table.status)) {
+  if (!status_ok(table.status)) {
     return error_result<BoundStatementPtr>(table.status);
   }
 
@@ -437,13 +416,13 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
 
   for (std::size_t index = 0; index < statement.values.size(); ++index) {
     auto expression = bind_expression(*statement.values[index], nullptr);
-    if (!ok(expression.status)) {
+    if (!status_ok(expression.status)) {
       return error_result<BoundStatementPtr>(std::move(expression.status));
     }
 
     const auto &column = bound->table.schema.columns[index];
     const auto coercion_status = coerce_to_column(**expression.value, column);
-    if (!ok(coercion_status)) {
+    if (!status_ok(coercion_status)) {
       return error_result<BoundStatementPtr>(coercion_status);
     }
 
@@ -461,7 +440,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
   const TableInfo *table = nullptr;
   if (!statement.table_name.empty()) {
     const auto resolved_table = catalog.GetTable(statement.table_name);
-    if (!ok(resolved_table.status)) {
+    if (!status_ok(resolved_table.status)) {
       return error_result<BoundStatementPtr>(resolved_table.status);
     }
     bound->table = *resolved_table.value;
@@ -485,7 +464,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
     }
 
     auto expression = bind_expression(*projection.expression, table);
-    if (!ok(expression.status)) {
+    if (!status_ok(expression.status)) {
       return error_result<BoundStatementPtr>(std::move(expression.status));
     }
     bound->projections.push_back(std::move(*expression.value));
@@ -493,7 +472,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
 
   if (statement.where != nullptr) {
     auto where = bind_expression(*statement.where, table);
-    if (!ok(where.status)) {
+    if (!status_ok(where.status)) {
       return error_result<BoundStatementPtr>(std::move(where.status));
     }
     if ((*where.value)->type != SqlType::Boolean) {

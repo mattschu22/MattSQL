@@ -1,5 +1,7 @@
 #include "mattsql/catalog/in_memory_catalog.hpp"
 
+#include "mattsql/common/result_utils.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <limits>
@@ -10,25 +12,6 @@
 
 namespace mattsql {
 namespace {
-
-[[nodiscard]] Status ok_status() { return {}; }
-
-[[nodiscard]] Status error_status(ErrorCode code, std::string message) {
-  return Status{code, std::move(message)};
-}
-
-template <typename T> [[nodiscard]] Result<T> ok_result(T value) {
-  Result<T> result;
-  result.value.emplace(std::move(value));
-  return result;
-}
-
-template <typename T>
-[[nodiscard]] Result<T> error_result(ErrorCode code, std::string message) {
-  Result<T> result;
-  result.status = error_status(code, std::move(message));
-  return result;
-}
 
 [[nodiscard]] std::string catalog_key(std::string_view value) {
   std::string key;
@@ -85,7 +68,7 @@ Result<TableInfo> InMemoryCatalog::CreateTable(const CreateTableRequest &request
 
   const auto table_key = catalog_key(request.name);
   const auto existing_table = hosted_api_->LoadTable(table_key);
-  if (existing_table.status.code == ErrorCode::Ok) {
+  if (status_ok(existing_table.status)) {
     return error_result<TableInfo>(ErrorCode::AlreadyExists, "table already exists");
   }
   if (existing_table.status.code != ErrorCode::NotFound) {
@@ -109,7 +92,7 @@ Result<TableInfo> InMemoryCatalog::CreateTable(const CreateTableRequest &request
 
     auto column = request.schema.columns[index];
     const auto column_status = validate_column(column);
-    if (column_status.code != ErrorCode::Ok) {
+    if (!status_ok(column_status)) {
       return error_result<TableInfo>(column_status.code, column_status.message);
     }
 
@@ -123,7 +106,7 @@ Result<TableInfo> InMemoryCatalog::CreateTable(const CreateTableRequest &request
   }
 
   const auto table_id = hosted_api_->AllocateTableId();
-  if (table_id.status.code != ErrorCode::Ok) {
+  if (!status_ok(table_id.status)) {
     return error_result<TableInfo>(table_id.status.code, table_id.status.message);
   }
 
@@ -165,13 +148,13 @@ Result<IndexInfo> InMemoryCatalog::CreateIndex(const CreateIndexRequest &request
 
   const auto table_key = catalog_key(request.table_name);
   const auto table = hosted_api_->LoadTable(table_key);
-  if (table.status.code != ErrorCode::Ok) {
+  if (!status_ok(table.status)) {
     return error_result<IndexInfo>(table.status.code, table.status.message);
   }
 
   const auto index_key = catalog_key(request.schema.name);
   const auto existing_index = hosted_api_->LoadIndex(table_key, index_key);
-  if (existing_index.status.code == ErrorCode::Ok) {
+  if (status_ok(existing_index.status)) {
     return error_result<IndexInfo>(ErrorCode::AlreadyExists, "index already exists");
   }
   if (existing_index.status.code != ErrorCode::NotFound) {
@@ -193,7 +176,7 @@ Result<IndexInfo> InMemoryCatalog::CreateIndex(const CreateIndexRequest &request
 
   IndexInfo index;
   const auto index_id = hosted_api_->AllocateIndexId();
-  if (index_id.status.code != ErrorCode::Ok) {
+  if (!status_ok(index_id.status)) {
     return error_result<IndexInfo>(index_id.status.code, index_id.status.message);
   }
 

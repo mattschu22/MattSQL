@@ -1,33 +1,13 @@
 #include "mattsql/catalog/hosted_catalog_api.hpp"
 
+#include "mattsql/common/result_utils.hpp"
+
 #include <algorithm>
 #include <string>
 #include <unordered_map>
 #include <utility>
 
 namespace mattsql {
-namespace {
-
-[[nodiscard]] Status ok_status() { return {}; }
-
-[[nodiscard]] Status error_status(ErrorCode code, std::string message) {
-  return Status{code, std::move(message)};
-}
-
-template <typename T> [[nodiscard]] Result<T> ok_result(T value) {
-  Result<T> result;
-  result.value.emplace(std::move(value));
-  return result;
-}
-
-template <typename T>
-[[nodiscard]] Result<T> error_result(ErrorCode code, std::string message) {
-  Result<T> result;
-  result.status = error_status(code, std::move(message));
-  return result;
-}
-
-} // namespace
 
 struct InMemoryHostedCatalogApi::Impl {
   TableId next_table_id = 1;
@@ -121,7 +101,7 @@ Result<IndexInfo> InMemoryHostedCatalogApi::StoreIndex(std::string_view table_ke
                                                        std::string_view index_key,
                                                        const IndexInfo &index) {
   auto table = LoadTable(table_key);
-  if (table.status.code != ErrorCode::Ok) {
+  if (!status_ok(table.status)) {
     return error_result<IndexInfo>(table.status.code, table.status.message);
   }
 
@@ -141,7 +121,7 @@ Result<IndexInfo>
 InMemoryHostedCatalogApi::LoadIndex(std::string_view table_key,
                                     std::string_view index_key) const {
   auto table = LoadTable(table_key);
-  if (table.status.code != ErrorCode::Ok) {
+  if (!status_ok(table.status)) {
     return error_result<IndexInfo>(table.status.code, table.status.message);
   }
 
