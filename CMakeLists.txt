@@ -27,7 +27,15 @@ function(mattsql_apply_warnings target)
   endif()
 endfunction()
 
-add_library(mattsql_core src/engine.cpp src/lexer/lexer.cpp src/parser/parser.cpp)
+add_library(
+  mattsql_core
+  src/binder/default_binder.cpp
+  src/catalog/hosted_catalog_api.cpp
+  src/catalog/in_memory_catalog.cpp
+  src/engine.cpp
+  src/lexer/lexer.cpp
+  src/parser/parser.cpp
+)
 add_library(MattSQL::core ALIAS mattsql_core)
 
 target_include_directories(
@@ -47,6 +55,8 @@ include(CTest)
 if(BUILD_TESTING)
   add_executable(
     mattsql_tests
+    tests/binder_tests.cpp
+    tests/catalog_tests.cpp
     tests/engine_tests.cpp
     tests/interface_compile_tests.cpp
     tests/lexer_tests.cpp

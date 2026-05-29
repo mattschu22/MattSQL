@@ -1,7 +1,10 @@
 #pragma once
 
 #include "mattsql/binder/binder.hpp"
+#include "mattsql/binder/default_binder.hpp"
 #include "mattsql/catalog/catalog.hpp"
+#include "mattsql/catalog/hosted_catalog_api.hpp"
+#include "mattsql/catalog/in_memory_catalog.hpp"
 #include "mattsql/common/status.hpp"
 #include "mattsql/common/types.hpp"
 #include "mattsql/engine.hpp"
