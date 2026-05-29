@@ -21,6 +21,7 @@ public:
   virtual Result<TableInfo> StoreTable(std::string_view table_key,
                                        const TableInfo &table) = 0;
   virtual Status EraseTable(std::string_view table_key) = 0;
+  virtual Status UpdateTable(const TableInfo &table) = 0;
   virtual Result<TableInfo> LoadTable(std::string_view table_key) const = 0;
   virtual Result<TableInfo> LoadTable(TableId table_id) const = 0;
   virtual Result<std::vector<TableInfo>> LoadTables() const = 0;
@@ -49,6 +50,7 @@ public:
   Result<TableInfo> StoreTable(std::string_view table_key,
                                const TableInfo &table) override;
   Status EraseTable(std::string_view table_key) override;
+  Status UpdateTable(const TableInfo &table) override;
   Result<TableInfo> LoadTable(std::string_view table_key) const override;
   Result<TableInfo> LoadTable(TableId table_id) const override;
   Result<std::vector<TableInfo>> LoadTables() const override;

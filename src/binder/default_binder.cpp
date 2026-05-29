@@ -320,6 +320,9 @@ struct ColumnNameParts {
   if (const auto *literal = dynamic_cast<const StringLiteral *>(&expression)) {
     return ok_result(make_literal(literal->value, SqlType::Text));
   }
+  if (const auto *literal = dynamic_cast<const BooleanLiteral *>(&expression)) {
+    return ok_result(make_literal(literal->value, SqlType::Boolean));
+  }
   if (dynamic_cast<const NullLiteral *>(&expression) != nullptr) {
     return ok_result(make_literal(NullValue{}, SqlType::Null));
   }

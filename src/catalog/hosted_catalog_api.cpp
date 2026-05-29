@@ -63,6 +63,23 @@ Status InMemoryHostedCatalogApi::EraseTable(std::string_view table_key) {
   return ok_status();
 }
 
+Status InMemoryHostedCatalogApi::UpdateTable(const TableInfo &table) {
+  const auto name_iter = impl_->table_names_by_id.find(table.id);
+  if (name_iter == impl_->table_names_by_id.end()) {
+    return error_status(ErrorCode::NotFound, "table not found");
+  }
+
+  const auto table_iter = impl_->tables_by_name.find(name_iter->second);
+  if (table_iter == impl_->tables_by_name.end()) {
+    return error_status(ErrorCode::Corruption, "table id index is corrupt");
+  }
+
+  auto updated = table;
+  updated.name = table_iter->second.name;
+  table_iter->second = std::move(updated);
+  return ok_status();
+}
+
 Result<TableInfo>
 InMemoryHostedCatalogApi::LoadTable(std::string_view table_key) const {
   const auto table_iter = impl_->tables_by_name.find(std::string(table_key));

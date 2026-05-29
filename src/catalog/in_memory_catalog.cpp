@@ -128,6 +128,20 @@ Result<TableInfo> InMemoryCatalog::GetTable(TableId table_id) const {
   return hosted_api_->LoadTable(table_id);
 }
 
+Status InMemoryCatalog::SetTableHeapRoot(TableId table_id, PageId heap_root_page_id) {
+  if (heap_root_page_id == kInvalidPageId) {
+    return error_status(ErrorCode::InvalidArgument, "heap root page id is required");
+  }
+
+  auto table = hosted_api_->LoadTable(table_id);
+  if (!status_ok(table.status)) {
+    return table.status;
+  }
+
+  table.value->heap_root_page_id = heap_root_page_id;
+  return hosted_api_->UpdateTable(*table.value);
+}
+
 Result<std::vector<TableInfo>> InMemoryCatalog::ListTables() const {
   return hosted_api_->LoadTables();
 }

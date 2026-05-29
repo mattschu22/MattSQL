@@ -26,6 +26,7 @@ public:
   Status DropTable(std::string_view table_name) override;
   Result<TableInfo> GetTable(std::string_view table_name) const override;
   Result<TableInfo> GetTable(TableId table_id) const override;
+  Status SetTableHeapRoot(TableId table_id, PageId heap_root_page_id) override;
   Result<std::vector<TableInfo>> ListTables() const override;
   Result<IndexInfo> CreateIndex(const CreateIndexRequest &request) override;
   Result<IndexInfo> GetIndex(std::string_view table_name,

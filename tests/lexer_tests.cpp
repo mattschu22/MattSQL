@@ -9,9 +9,9 @@
 namespace {
 
 /// Asserts a token's type, lexeme, and starting source location.
-void expect_token(const std::vector<mattsql::Token>& tokens, std::size_t index,
-                  mattsql::TokenType type, const std::string& lexeme,
-                  std::size_t line, std::size_t column) {
+void expect_token(const std::vector<mattsql::Token> &tokens, std::size_t index,
+                  mattsql::TokenType type, const std::string &lexeme, std::size_t line,
+                  std::size_t column) {
   EXPECT_TRUE(index < tokens.size());
   EXPECT_TRUE(tokens[index].type == type);
   EXPECT_EQ(tokens[index].lexeme, lexeme);
@@ -55,6 +55,20 @@ TEST_CASE(tokenizes_literals_and_comparison_operators) {
   expect_token(tokens, 7, mattsql::TokenType::String, "'Matt''SQL'", 1U, 29U);
   expect_token(tokens, 8, mattsql::TokenType::Semicolon, ";", 1U, 40U);
   expect_token(tokens, 9, mattsql::TokenType::EndOfFile, "", 1U, 41U);
+}
+
+/// Verifies TRUE and FALSE are keywords without stealing longer identifiers.
+TEST_CASE(tokenizes_boolean_keywords_and_identifier_prefixes) {
+  mattsql::Lexer lexer("TRUE false true_value falsehood");
+
+  const auto tokens = lexer.Tokenize();
+
+  EXPECT_EQ(tokens.size(), 5U);
+  expect_token(tokens, 0, mattsql::TokenType::True, "TRUE", 1U, 1U);
+  expect_token(tokens, 1, mattsql::TokenType::False, "false", 1U, 6U);
+  expect_token(tokens, 2, mattsql::TokenType::Identifier, "true_value", 1U, 12U);
+  expect_token(tokens, 3, mattsql::TokenType::Identifier, "falsehood", 1U, 23U);
+  expect_token(tokens, 4, mattsql::TokenType::EndOfFile, "", 1U, 32U);
 }
 
 /// Verifies comments are skipped while multiline locations remain correct.

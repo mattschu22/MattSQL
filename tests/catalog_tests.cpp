@@ -68,6 +68,16 @@ public:
     return {};
   }
 
+  mattsql::Status UpdateTable(const mattsql::TableInfo &table) override {
+    ++update_table_calls;
+    const auto key_iter = table_keys_by_id.find(table.id);
+    if (key_iter == table_keys_by_id.end()) {
+      return {mattsql::ErrorCode::NotFound, "table not found"};
+    }
+    tables[key_iter->second] = table;
+    return {};
+  }
+
   mattsql::Result<mattsql::TableInfo>
   LoadTable(std::string_view table_key) const override {
     ++load_table_by_name_calls;
@@ -145,6 +155,7 @@ public:
   int allocate_table_id_calls = 0;
   int allocate_index_id_calls = 0;
   int store_table_calls = 0;
+  int update_table_calls = 0;
   int store_index_calls = 0;
   int erase_table_calls = 0;
 
@@ -189,6 +200,15 @@ TEST_CASE(catalog_creates_gets_lists_and_drops_tables) {
   const auto by_id = catalog.GetTable(created.value->id);
   EXPECT_TRUE(mattsql::status_ok(by_id.status));
   EXPECT_EQ(by_id.value->name, std::string("users"));
+
+  EXPECT_TRUE(mattsql::status_ok(
+      catalog.SetTableHeapRoot(created.value->id, mattsql::PageId{99})));
+  const auto with_root = catalog.GetTable("users");
+  EXPECT_TRUE(mattsql::status_ok(with_root.status));
+  EXPECT_EQ(with_root.value->heap_root_page_id, mattsql::PageId{99});
+  EXPECT_TRUE(
+      catalog.SetTableHeapRoot(created.value->id, mattsql::kInvalidPageId).code ==
+      mattsql::ErrorCode::InvalidArgument);
 
   const auto listed = catalog.ListTables();
   EXPECT_TRUE(mattsql::status_ok(listed.status));
@@ -446,6 +466,12 @@ TEST_CASE(catalog_uses_mock_hosted_api) {
   EXPECT_TRUE(mattsql::status_ok(by_name.status));
   EXPECT_EQ(by_name.value->id, created.value->id);
   EXPECT_EQ(api->last_table_key, std::string("users"));
+
+  EXPECT_TRUE(mattsql::status_ok(
+      catalog.SetTableHeapRoot(created.value->id, mattsql::PageId{321})));
+  EXPECT_EQ(api->update_table_calls, 1);
+  EXPECT_EQ(catalog.GetTable(created.value->id).value->heap_root_page_id,
+            mattsql::PageId{321});
 
   mattsql::CreateIndexRequest request;
   request.table_name = "users";

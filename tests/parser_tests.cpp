@@ -9,24 +9,22 @@
 namespace {
 
 /// Lexes and parses a SQL statement for parser tests.
-mattsql::StatementPtr parse_statement(const std::string& sql) {
+mattsql::StatementPtr parse_statement(const std::string &sql) {
   mattsql::Lexer lexer(sql);
   mattsql::Parser parser(lexer.Tokenize());
   return parser.ParseStatement();
 }
 
 /// Downcasts a mutable AST node and asserts the cast succeeds.
-template <typename T>
-T* as(mattsql::AstNode* node) {
-  auto* value = dynamic_cast<T*>(node);
+template <typename T> T *as(mattsql::AstNode *node) {
+  auto *value = dynamic_cast<T *>(node);
   EXPECT_TRUE(value != nullptr);
   return value;
 }
 
 /// Downcasts a const AST node and asserts the cast succeeds.
-template <typename T>
-const T* as(const mattsql::AstNode* node) {
-  const auto* value = dynamic_cast<const T*>(node);
+template <typename T> const T *as(const mattsql::AstNode *node) {
+  const auto *value = dynamic_cast<const T *>(node);
   EXPECT_TRUE(value != nullptr);
   return value;
 }
@@ -38,19 +36,19 @@ TEST_CASE(parses_select_with_from_where_and_precedence) {
   const auto statement =
       parse_statement("SELECT id, name FROM users WHERE age >= 18 AND active = 1;");
 
-  const auto* select = as<mattsql::SelectStatement>(statement.get());
+  const auto *select = as<mattsql::SelectStatement>(statement.get());
   EXPECT_EQ(select->projections.size(), 2U);
   EXPECT_EQ(select->table_name, std::string("users"));
   EXPECT_TRUE(select->where != nullptr);
 
-  const auto* first_projection =
+  const auto *first_projection =
       as<mattsql::ColumnRef>(select->projections[0].expression.get());
-  const auto* second_projection =
+  const auto *second_projection =
       as<mattsql::ColumnRef>(select->projections[1].expression.get());
   EXPECT_EQ(first_projection->name, std::string("id"));
   EXPECT_EQ(second_projection->name, std::string("name"));
 
-  const auto* where = as<mattsql::BinaryExpression>(select->where.get());
+  const auto *where = as<mattsql::BinaryExpression>(select->where.get());
   EXPECT_TRUE(where->op == mattsql::BinaryOperator::And);
   EXPECT_TRUE(as<mattsql::BinaryExpression>(where->left.get())->op ==
               mattsql::BinaryOperator::GreaterEqual);
@@ -63,7 +61,7 @@ TEST_CASE(parses_insert_values_and_decodes_strings) {
   const auto statement =
       parse_statement("INSERT INTO users VALUES (1, 'Matt''SQL', NULL);");
 
-  const auto* insert = as<mattsql::InsertStatement>(statement.get());
+  const auto *insert = as<mattsql::InsertStatement>(statement.get());
   EXPECT_EQ(insert->table_name, std::string("users"));
   EXPECT_EQ(insert->values.size(), 3U);
 
@@ -73,12 +71,24 @@ TEST_CASE(parses_insert_values_and_decodes_strings) {
   as<mattsql::NullLiteral>(insert->values[2].get());
 }
 
+/// Verifies TRUE and FALSE parse as boolean literal expressions.
+TEST_CASE(parses_boolean_literals) {
+  const auto statement = parse_statement("SELECT TRUE, false;");
+
+  const auto *select = as<mattsql::SelectStatement>(statement.get());
+  EXPECT_EQ(select->projections.size(), 2U);
+  EXPECT_EQ(as<mattsql::BooleanLiteral>(select->projections[0].expression.get())->value,
+            true);
+  EXPECT_EQ(as<mattsql::BooleanLiteral>(select->projections[1].expression.get())->value,
+            false);
+}
+
 /// Verifies CREATE TABLE column names and supported type names.
 TEST_CASE(parses_create_table_column_definitions) {
   const auto statement =
       parse_statement("CREATE TABLE users (id INT, name TEXT, active BOOL);");
 
-  const auto* create = as<mattsql::CreateTableStatement>(statement.get());
+  const auto *create = as<mattsql::CreateTableStatement>(statement.get());
   EXPECT_EQ(create->table_name, std::string("users"));
   EXPECT_EQ(create->columns.size(), 3U);
   EXPECT_EQ(create->columns[0].name, std::string("id"));
@@ -93,13 +103,13 @@ TEST_CASE(parses_create_table_column_definitions) {
 TEST_CASE(parses_arithmetic_precedence) {
   const auto statement = parse_statement("SELECT 1 + 2 * 3;");
 
-  const auto* select = as<mattsql::SelectStatement>(statement.get());
-  const auto* add =
+  const auto *select = as<mattsql::SelectStatement>(statement.get());
+  const auto *add =
       as<mattsql::BinaryExpression>(select->projections[0].expression.get());
   EXPECT_TRUE(add->op == mattsql::BinaryOperator::Add);
   as<mattsql::IntegerLiteral>(add->left.get());
 
-  const auto* multiply = as<mattsql::BinaryExpression>(add->right.get());
+  const auto *multiply = as<mattsql::BinaryExpression>(add->right.get());
   EXPECT_TRUE(multiply->op == mattsql::BinaryOperator::Multiply);
 }
 
@@ -108,15 +118,13 @@ TEST_CASE(parses_select_projection_aliases) {
   const auto statement =
       parse_statement("SELECT 'x as y' AS label, id AS user_id FROM users;");
 
-  const auto* select = as<mattsql::SelectStatement>(statement.get());
+  const auto *select = as<mattsql::SelectStatement>(statement.get());
   EXPECT_EQ(select->projections.size(), 2U);
   EXPECT_EQ(select->projections[0].alias, std::string("label"));
   EXPECT_EQ(select->projections[1].alias, std::string("user_id"));
-  EXPECT_EQ(as<mattsql::StringLiteral>(select->projections[0].expression.get())
-                ->value,
+  EXPECT_EQ(as<mattsql::StringLiteral>(select->projections[0].expression.get())->value,
             std::string("x as y"));
-  EXPECT_EQ(as<mattsql::ColumnRef>(select->projections[1].expression.get())
-                ->name,
+  EXPECT_EQ(as<mattsql::ColumnRef>(select->projections[1].expression.get())->name,
             std::string("id"));
 }
 
@@ -125,7 +133,7 @@ TEST_CASE(reports_parse_errors_with_locations) {
   try {
     parse_statement("SELECT FROM users;");
     EXPECT_TRUE(false);
-  } catch (const mattsql::ParseError& error) {
+  } catch (const mattsql::ParseError &error) {
     EXPECT_EQ(error.Location().line, 1U);
     EXPECT_EQ(error.Location().column, 8U);
   }

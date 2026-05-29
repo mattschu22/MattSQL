@@ -33,10 +33,13 @@ add_library(
   src/catalog/hosted_catalog_api.cpp
   src/catalog/in_memory_catalog.cpp
   src/engine.cpp
+  src/execution/default_executor.cpp
   src/lexer/lexer.cpp
   src/optimizer/default_optimizer.cpp
   src/parser/parser.cpp
   src/planner/default_logical_planner.cpp
+  src/planner/default_physical_planner.cpp
+  src/storage/tuple_codec.cpp
 )
 add_library(MattSQL::core ALIAS mattsql_core)
 
@@ -60,9 +63,11 @@ if(BUILD_TESTING)
     tests/binder_tests.cpp
     tests/catalog_tests.cpp
     tests/engine_tests.cpp
+    tests/executor_tests.cpp
     tests/interface_compile_tests.cpp
     tests/lexer_tests.cpp
     tests/optimizer_tests.cpp
+    tests/physical_planner_tests.cpp
     tests/planner_tests.cpp
     tests/parser_tests.cpp
   )

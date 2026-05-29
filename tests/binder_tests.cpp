@@ -96,6 +96,28 @@ TEST_CASE(binder_binds_insert_values_against_table_schema) {
   EXPECT_EQ(std::get<bool>(active->value), true);
 }
 
+/// Verifies TRUE/FALSE literals bind as BOOLEAN without integer coercion.
+TEST_CASE(binder_binds_boolean_literals) {
+  auto catalog = make_catalog();
+
+  const auto insert_result =
+      bind_sql("INSERT INTO users VALUES (1, 'Ada', TRUE);", catalog);
+  EXPECT_TRUE(mattsql::status_ok(insert_result.status));
+  const auto *insert = as<mattsql::BoundInsertStatement>(insert_result.value->get());
+  const auto *active = as<mattsql::BoundLiteralExpression>(insert->values[2].get());
+  EXPECT_TRUE(active->type == mattsql::SqlType::Boolean);
+  EXPECT_EQ(std::get<bool>(active->value), true);
+
+  mattsql::InMemoryCatalog empty_catalog;
+  const auto select_result = bind_sql("SELECT false;", empty_catalog);
+  EXPECT_TRUE(mattsql::status_ok(select_result.status));
+  const auto *select = as<mattsql::BoundSelectStatement>(select_result.value->get());
+  const auto *literal =
+      as<mattsql::BoundLiteralExpression>(select->projections[0].get());
+  EXPECT_TRUE(literal->type == mattsql::SqlType::Boolean);
+  EXPECT_EQ(std::get<bool>(literal->value), false);
+}
+
 /// Verifies SELECT binding resolves columns, qualifiers, and WHERE types.
 TEST_CASE(binder_binds_select_columns_and_where_predicate) {
   auto catalog = make_catalog();

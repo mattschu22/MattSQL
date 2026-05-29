@@ -61,8 +61,7 @@ Parser::Parser(std::vector<Token> tokens) : tokens_(std::move(tokens)) {
 
   if (tokens_.back().type != TokenType::EndOfFile) {
     const auto location = tokens_.back().range.end;
-    tokens_.push_back(
-        Token{TokenType::EndOfFile, "", SourceRange{location, location}});
+    tokens_.push_back(Token{TokenType::EndOfFile, "", SourceRange{location, location}});
   }
 }
 
@@ -77,8 +76,7 @@ StatementPtr Parser::ParseStatement() {
   } else if (Match(TokenType::Create)) {
     statement = ParseCreateTableStatement();
   } else if (Match(TokenType::Invalid)) {
-    throw ParseError("invalid token: " + Previous().lexeme,
-                     Previous().range.start);
+    throw ParseError("invalid token: " + Previous().lexeme, Previous().range.start);
   } else {
     throw ParseError("expected SQL statement", Peek().range.start);
   }
@@ -98,13 +96,13 @@ StatementPtr Parser::ParseStatement() {
 bool Parser::IsAtEnd() const { return Peek().type == TokenType::EndOfFile; }
 
 /// Returns the current token without consuming it.
-const Token& Parser::Peek() const { return tokens_[current_]; }
+const Token &Parser::Peek() const { return tokens_[current_]; }
 
 /// Returns the token most recently consumed by Advance.
-const Token& Parser::Previous() const { return tokens_[current_ - 1]; }
+const Token &Parser::Previous() const { return tokens_[current_ - 1]; }
 
 /// Consumes the current token unless it is EOF, then returns the previous token.
-const Token& Parser::Advance() {
+const Token &Parser::Advance() {
   if (!IsAtEnd()) {
     ++current_;
   }
@@ -126,7 +124,7 @@ bool Parser::Match(TokenType type) {
 }
 
 /// Consumes a required token or throws a located parse error.
-const Token& Parser::Consume(TokenType type, const std::string& message) {
+const Token &Parser::Consume(TokenType type, const std::string &message) {
   if (Check(type)) {
     return Advance();
   }
@@ -172,14 +170,12 @@ StatementPtr Parser::ParseCreateTableStatement() {
 
   Consume(TokenType::Table, "expected TABLE after CREATE");
   statement->table_name =
-      Consume(TokenType::Identifier, "expected table name after CREATE TABLE")
-          .lexeme;
+      Consume(TokenType::Identifier, "expected table name after CREATE TABLE").lexeme;
   Consume(TokenType::LeftParen, "expected '(' before column definitions");
 
   do {
     ColumnDefinition column;
-    column.name =
-        Consume(TokenType::Identifier, "expected column name").lexeme;
+    column.name = Consume(TokenType::Identifier, "expected column name").lexeme;
     column.type = ParseTypeName();
     statement->columns.push_back(std::move(column));
   } while (Match(TokenType::Comma));
@@ -233,8 +229,7 @@ ExpressionPtr Parser::ParseExpression(int min_precedence) {
     auto right = ParseExpression(precedence + 1);
 
     left = std::make_unique<BinaryExpression>(
-        std::move(left), TokenToBinaryOperator(operator_token.type),
-        std::move(right));
+        std::move(left), TokenToBinaryOperator(operator_token.type), std::move(right));
   }
 
   return left;
@@ -242,8 +237,7 @@ ExpressionPtr Parser::ParseExpression(int min_precedence) {
 
 /// Parses prefix unary operators before delegating to primary expressions.
 ExpressionPtr Parser::ParsePrefixExpression() {
-  if (Match(TokenType::Plus) || Match(TokenType::Minus) ||
-      Match(TokenType::Not)) {
+  if (Match(TokenType::Plus) || Match(TokenType::Minus) || Match(TokenType::Not)) {
     const auto operator_type = Previous().type;
 
     // Parse the operand with prefix parsing again so chained prefixes like
@@ -260,19 +254,25 @@ ExpressionPtr Parser::ParsePrimaryExpression() {
   if (Match(TokenType::Integer)) {
     try {
       return std::make_unique<IntegerLiteral>(std::stoll(Previous().lexeme));
-    } catch (const std::exception&) {
-      throw ParseError("integer literal is out of range",
-                       Previous().range.start);
+    } catch (const std::exception &) {
+      throw ParseError("integer literal is out of range", Previous().range.start);
     }
   }
 
   if (Match(TokenType::String)) {
     try {
-      return std::make_unique<StringLiteral>(
-          unescape_sql_string(Previous().lexeme));
-    } catch (const std::exception&) {
+      return std::make_unique<StringLiteral>(unescape_sql_string(Previous().lexeme));
+    } catch (const std::exception &) {
       throw ParseError("malformed string literal", Previous().range.start);
     }
+  }
+
+  if (Match(TokenType::True)) {
+    return std::make_unique<BooleanLiteral>(true);
+  }
+
+  if (Match(TokenType::False)) {
+    return std::make_unique<BooleanLiteral>(false);
   }
 
   if (Match(TokenType::Null)) {
@@ -290,8 +290,7 @@ ExpressionPtr Parser::ParsePrimaryExpression() {
     // relation and column components.
     while (Match(TokenType::Dot)) {
       name += ".";
-      name += Consume(TokenType::Identifier, "expected identifier after '.'")
-                  .lexeme;
+      name += Consume(TokenType::Identifier, "expected identifier after '.'").lexeme;
     }
 
     return std::make_unique<ColumnRef>(std::move(name));
@@ -304,8 +303,7 @@ ExpressionPtr Parser::ParsePrimaryExpression() {
   }
 
   if (Match(TokenType::Invalid)) {
-    throw ParseError("invalid token: " + Previous().lexeme,
-                     Previous().range.start);
+    throw ParseError("invalid token: " + Previous().lexeme, Previous().range.start);
   }
 
   throw ParseError("expected expression", Peek().range.start);
@@ -384,7 +382,7 @@ UnaryOperator Parser::TokenToUnaryOperator(TokenType type) {
 
 /// Parses a supported column type name for CREATE TABLE.
 TypeName Parser::ParseTypeName() {
-  const auto& token = Consume(TokenType::Identifier, "expected column type");
+  const auto &token = Consume(TokenType::Identifier, "expected column type");
   const auto type_name = lowercase(token.lexeme);
 
   if (type_name == "int" || type_name == "integer") {

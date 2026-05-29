@@ -267,9 +267,7 @@ bool Lexer::IsAlpha(char c) {
 }
 
 /// Returns true for ASCII decimal digit characters.
-bool Lexer::IsDigit(char c) {
-  return std::isdigit(static_cast<unsigned char>(c)) != 0;
-}
+bool Lexer::IsDigit(char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; }
 
 /// Returns true for characters that may continue an identifier.
 bool Lexer::IsAlphaNumeric(char c) { return IsAlpha(c) || IsDigit(c); }
@@ -336,6 +334,12 @@ TokenType Lexer::LookupKeyword(std::string_view text) {
   }
   if (lowered == "limit") {
     return TokenType::Limit;
+  }
+  if (lowered == "true") {
+    return TokenType::True;
+  }
+  if (lowered == "false") {
+    return TokenType::False;
   }
 
   return TokenType::Identifier;
