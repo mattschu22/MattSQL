@@ -32,6 +32,47 @@ The main research-style question is:
 
 What can a SQL database do better when it owns the operating environment?
 
+Batch-Oriented Runtime Principle
+
+The operating environment should make batching a first-class property of the
+database system. The database should decide which logical work can be shared,
+while the runtime and kernel provide efficient primitives for grouping tasks,
+I/O requests, memory operations, timers, and completions.
+
+The kernel should remain SQL-agnostic. It should not understand predicates,
+schemas, query plans, or table layouts. Instead, it should expose low-level
+batch-friendly mechanisms that the C++ database runtime can use to implement
+shared scans, vectorized execution, group commit, checkpoint batching, and
+device-friendly I/O.
+
+Important batching layers:
+
+- Logical query batching
+  - Shared sequential scans
+  - Vectorized row batches
+  - Common predicate-fragment evaluation
+  - Projection unioning across compatible queries
+  - Snapshot-compatible query grouping
+  - Bounded fanout queues for shared scan consumers
+
+- Physical storage batching
+  - Page read windows
+  - Sequential prefetch batches
+  - Dirty-page flush groups
+  - WAL group commit
+  - Checkpoint write batches
+  - Batched I/O completions
+  - Span-based page allocation and free
+
+The intended boundary is:
+
+- SQL and planning layers decide what work can be shared.
+- The database runtime decides when to batch and how large batches should be.
+- The buffer pool decides which pages to read, prefetch, retain, flush, or evict.
+- The kernel/runtime decides how to schedule tasks, allocate physical memory,
+  issue batched I/O, and deliver batched completions.
+- Device drivers translate runtime batches into efficient hardware queue usage.
+
 Core Design
 
 The system will be structured as layered components:
@@ -45,16 +86,24 @@ The system will be structured as layered components:
    - Logical planning
    - Physical planning
    - Query execution
+   - Vectorized execution batches
+   - Shared scan planning hooks
 
 2. Database Storage Layer
    - Slotted pages
    - Heap tables
    - B+ tree indexes
    - Buffer pool
+   - Buffer pool scan hints
+   - Page read windows
+   - Sequential prefetch
+   - Batched dirty-page flushing
    - Page identifiers
    - Free-space management
    - Write-ahead log
+   - WAL group commit
    - Checkpoints
+   - Checkpoint write batching
    - Recovery
 
 3. Transaction Layer
@@ -67,24 +116,37 @@ The system will be structured as layered components:
 4. Database Runtime Layer
    - Task abstraction
    - Cooperative scheduling
+   - Batch-aware task groups
+   - Shared scan coordinator
+   - Bounded producer/consumer queues
    - Later preemptive scheduling
    - Asynchronous I/O submission
+   - Batched I/O submission
    - I/O completion polling
+   - Batched completion delivery
    - Timers
+   - Short batching windows
    - Memory arenas
    - Runtime diagnostics
+   - Batch tracing and observability
 
 5. Minimal Kernel Layer
    - Boot path
    - Serial console
    - Panic handler
    - Physical memory manager
+   - Span-based physical page allocation
    - Virtual memory setup
    - Interrupt descriptor table
    - Timer interrupts
+   - Timer/event service for batching windows
    - Context switching
+   - Batch-aware scheduler primitives
    - Device driver abstractions
    - Virtio block device support
+   - Batched block I/O queues
+   - Shared submission/completion rings
+   - Storage ordering barriers
    - Later NVMe support
    - Later networking
 
@@ -176,14 +238,20 @@ The database should not call POSIX APIs directly. Instead, all runtime interacti
 Example services:
 
 - Allocate physical or runtime-managed pages
+- Allocate and free page spans
 - Free pages
 - Submit asynchronous reads
 - Submit asynchronous writes
+- Submit batches of asynchronous I/O requests
 - Flush storage ranges
+- Flush ordered write groups
 - Poll I/O completion
+- Poll batches of I/O completions
 - Spawn runtime tasks
+- Create task groups with priority and deadline hints
 - Yield execution
 - Pin tasks to cores
+- Schedule short timers and delayed wakeups
 - Read monotonic time
 - Emit diagnostic logs
 - Panic or abort with structured debug information
@@ -229,9 +297,15 @@ Goals:
 - Heap table storage
 - Buffer pool
 - Page pinning
+- Buffer pool scan hints
+- Page read windows
+- Sequential prefetch planning
 - Dirty-page tracking
+- Batched dirty-page flushing
 - Write-ahead log
+- WAL group commit model
 - Checkpointing
+- Checkpoint write batching
 - Recovery
 - Deterministic crash simulation
 - Randomized write-reordering tests
@@ -245,14 +319,25 @@ Build a database-specific runtime in hosted mode.
 Goals:
 
 - Cooperative task scheduler
+- Batch-aware task groups
 - Async I/O abstraction
+- Batched I/O submission
 - I/O completion polling
+- Batched completion polling
 - Query tasks
+- Shared scan coordinator
+- Vectorized row batches
+- Common predicate-fragment evaluation for compatible scans
+- Bounded fanout queues for shared scan consumers
 - Background checkpoint task
 - WAL flush task
+- Group commit batching
 - Buffer eviction task
 - Basic priority scheduling
+- Backpressure-aware scheduling
+- Short batching-window timers
 - Runtime tracing and observability
+- Metrics for batch size, queue depth, wait time, and completion latency
 
 This phase defines the scheduling model before the system moves to bare metal.
 
@@ -266,11 +351,17 @@ Goals:
 - Serial logging
 - Panic handling
 - Physical memory allocation
+- Physical page-span allocation
 - Virtual memory setup
 - Basic heap allocator
 - Timer interrupt
+- Timer/event service for batching windows
 - Cooperative scheduling
+- Task groups, priority hints, and affinity hints
 - Virtio block driver
+- Batched virtio block submission and completion
+- Shared request/completion rings across the C++/Rust boundary
+- Storage flush and ordering barriers
 - Runtime API exposed to the C++ database
 - Boot directly into the database shell or test runner
 
@@ -293,6 +384,8 @@ Goals:
 
 - Database owns block allocation
 - Database owns persistence format
+- Extent layout supports sequential scan batches
+- WAL and checkpoint regions support grouped writes
 - No general-purpose filesystem required
 - WAL and checkpoint behavior are explicitly controlled
 - Recovery works after simulated and QEMU-level crashes
@@ -316,10 +409,15 @@ Use the system to evaluate OS/DB co-design questions.
 Possible experiments:
 
 - Database-aware scheduling vs general-purpose scheduling
+- Isolated sequential scans vs shared sequential scans
 - Raw block access vs host filesystem
 - Database-managed buffer pool vs OS page cache
+- Per-page I/O vs batched I/O
+- Single-transaction commit vs WAL group commit
+- Small checkpoint writes vs checkpoint write batches
 - WAL-aware I/O ordering
 - Query-priority-aware scheduling
+- Batching-window size vs p50, p95, and p99 latency
 - Core partitioning for OLTP-style workloads
 - Tail latency under checkpoint pressure
 - Recovery time after forced crashes
@@ -336,12 +434,16 @@ The first complete version should support:
 - Simple WHERE predicates
 - Projection
 - Sequential scan
+- Shared sequential scan coordination for compatible read-only scans
+- Vectorized row batches in the execution path
 - Basic expression evaluation
 - Integer and string types
 - Heap table storage
 - Buffer pool
+- Buffer pool scan hints and read windows
 - Single-writer transactions
 - WAL durability
+- WAL group commit
 - Crash recovery
 - QEMU boot
 - Raw block-device persistence
@@ -371,6 +473,14 @@ Hosted tests:
 - Unit tests for lexer, parser, catalog, storage, and executor
 - Fuzz tests for parser and page formats
 - Property tests for B+ tree operations
+- Shared scan grouping tests
+- Vectorized batch execution tests
+- Runtime task-group tests
+- Batched I/O submission and completion tests
+- Batching-window timer tests
+- Buffer pool read-window and prefetch tests
+- Dirty-page batch flush tests
+- Slow-consumer backpressure tests
 - Sanitizer builds
 - AddressSanitizer
 - UndefinedBehaviorSanitizer
@@ -379,8 +489,11 @@ Hosted tests:
 Crash tests:
 
 - Crash after every WAL write
+- Crash after each grouped WAL commit write
 - Crash after every data-page write
+- Crash during a dirty-page flush batch
 - Crash during checkpoint
+- Crash during checkpoint write batching
 - Crash during transaction commit
 - Crash during page eviction
 - Crash during catalog update
@@ -391,8 +504,13 @@ Bare-metal tests:
 - QEMU boot tests
 - Serial-output test harness
 - Block-device read/write tests
+- Batched block-device read/write tests
+- Shared submission/completion ring tests
 - Allocator tests
+- Physical page-span allocation tests
 - Scheduler tests
+- Task-group scheduling tests
+- Timer/event batching-window tests
 - Database smoke tests
 - Recovery tests using persisted QEMU disk images
 
@@ -410,6 +528,8 @@ Useful tools:
 - WAL inspectors
 - Disk image inspection tools
 - Runtime trace dumps
+- Batch trace dumps
+- Queue-depth and completion-latency reports
 - Deterministic replay where practical
 - Hosted sanitizer builds
 - CI for hosted tests
@@ -443,6 +563,8 @@ dbos/
     txn/
     runtime/
       platform.hpp
+      batch.hpp
+      scan_coordinator.hpp
       hosted/
       baremetal_ffi/
 
@@ -455,6 +577,8 @@ dbos/
       memory/
       interrupts/
       scheduler/
+      events/
+      rings/
       drivers/
         virtio/
         nvme/
@@ -481,6 +605,7 @@ dbos/
     architecture.md
     storage_format.md
     runtime_api.md
+    batching.md
     recovery.md
     testing.md
 
@@ -495,6 +620,11 @@ Major risks:
 - Building a filesystem instead of a database storage layout
 - Debugging real hardware too early
 - Designing an FFI boundary that is too complex
+- Letting the kernel learn SQL-specific concepts
+- Batching too aggressively and hurting latency-sensitive queries
+- Allowing slow consumers to stall shared scan producers
+- Violating snapshot or ordering semantics while coalescing scans
+- Weak I/O barrier semantics that break WAL correctness
 - Allowing C++ exceptions or Rust panics to cross language boundaries
 - Implementing networking too early
 - Skipping crash testing
@@ -520,6 +650,10 @@ The expected result is a small but coherent database operating system:
 - A Rust-based minimal database runtime/kernel
 - A raw block-device storage format
 - WAL-based recovery
+- Batch-oriented database runtime primitives
+- Shared sequential scans for compatible queries
+- Batched asynchronous I/O and completion delivery
+- Group commit and checkpoint write batching
 - A QEMU-bootable image
 - Hosted and bare-metal runtime backends
 - Crash testing infrastructure
