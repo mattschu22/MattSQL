@@ -1,5 +1,7 @@
 #include "mattsql/common/query_result.hpp"
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/value_utils.hpp"
+#include "mattsql/lexer/lexer.hpp"
 #include "mattsql/sql_engine.hpp"
 
 #include <cstdint>
@@ -65,116 +67,24 @@ struct Session {
   return true;
 }
 
-// Parser currently accepts one statement at a time, so the CLI splits scripts on
-// semicolons that are outside literals and comments.
+// Parser currently accepts one statement at a time, so the CLI uses lexer token
+// ranges to split scripts on statement-terminating semicolons.
 [[nodiscard]] bool extract_statement(std::string &buffer, std::string &statement) {
-  bool in_string = false;
-  bool in_line_comment = false;
-  bool in_block_comment = false;
-
-  for (std::size_t index = 0; index < buffer.size(); ++index) {
-    const auto current = buffer[index];
-    const auto next = index + 1 < buffer.size() ? buffer[index + 1] : '\0';
-
-    if (in_line_comment) {
-      if (current == '\n') {
-        in_line_comment = false;
+  try {
+    mattsql::Lexer lexer(buffer);
+    for (const auto &token : lexer.Tokenize()) {
+      if (token.type == mattsql::TokenType::Semicolon) {
+        const auto end = token.range.end.offset;
+        statement = buffer.substr(0, end);
+        buffer.erase(0, end);
+        return true;
       }
-      continue;
     }
-
-    if (in_block_comment) {
-      if (current == '*' && next == '/') {
-        ++index;
-        in_block_comment = false;
-      }
-      continue;
-    }
-
-    if (in_string) {
-      if (current == '\'') {
-        if (next == '\'') {
-          ++index;
-          continue;
-        }
-        in_string = false;
-      }
-      continue;
-    }
-
-    if (current == '\'') {
-      in_string = true;
-      continue;
-    }
-
-    if (current == '-' && next == '-') {
-      ++index;
-      in_line_comment = true;
-      continue;
-    }
-
-    if (current == '/' && next == '*') {
-      ++index;
-      in_block_comment = true;
-      continue;
-    }
-
-    if (current == ';') {
-      statement = buffer.substr(0, index + 1);
-      buffer.erase(0, index + 1);
-      return true;
-    }
+  } catch (const std::exception &) {
+    return false;
   }
 
   return false;
-}
-
-[[nodiscard]] std::string error_code_name(mattsql::ErrorCode code) {
-  switch (code) {
-  case mattsql::ErrorCode::Ok:
-    return "Ok";
-  case mattsql::ErrorCode::InvalidArgument:
-    return "InvalidArgument";
-  case mattsql::ErrorCode::NotFound:
-    return "NotFound";
-  case mattsql::ErrorCode::AlreadyExists:
-    return "AlreadyExists";
-  case mattsql::ErrorCode::TypeMismatch:
-    return "TypeMismatch";
-  case mattsql::ErrorCode::ParseError:
-    return "ParseError";
-  case mattsql::ErrorCode::BindError:
-    return "BindError";
-  case mattsql::ErrorCode::PlanError:
-    return "PlanError";
-  case mattsql::ErrorCode::ExecutionError:
-    return "ExecutionError";
-  case mattsql::ErrorCode::IoError:
-    return "IoError";
-  case mattsql::ErrorCode::Corruption:
-    return "Corruption";
-  case mattsql::ErrorCode::TransactionConflict:
-    return "TransactionConflict";
-  case mattsql::ErrorCode::NotSupported:
-    return "NotSupported";
-  case mattsql::ErrorCode::Internal:
-    return "Internal";
-  }
-
-  return "Unknown";
-}
-
-[[nodiscard]] std::string format_value(const mattsql::Value &value) {
-  if (std::holds_alternative<mattsql::NullValue>(value)) {
-    return "NULL";
-  }
-  if (const auto *integer = std::get_if<std::int64_t>(&value)) {
-    return std::to_string(*integer);
-  }
-  if (const auto *boolean = std::get_if<bool>(&value)) {
-    return *boolean ? "true" : "false";
-  }
-  return std::get<std::string>(value);
 }
 
 void print_result(const mattsql::QueryResult &result) {
@@ -196,7 +106,7 @@ void print_result(const mattsql::QueryResult &result) {
       if (index != 0) {
         std::cout << '\t';
       }
-      std::cout << format_value(row[index]);
+      std::cout << mattsql::FormatValue(row[index]);
     }
     std::cout << '\n';
   }
@@ -211,7 +121,7 @@ void print_result(const mattsql::QueryResult &result) {
   try {
     auto result = session.engine.Execute(trimmed);
     if (!mattsql::status_ok(result.status)) {
-      std::cerr << "error[" << error_code_name(result.status.code)
+      std::cerr << "error[" << mattsql::ErrorCodeName(result.status.code)
                 << "]: " << result.status.message << '\n';
       return false;
     }

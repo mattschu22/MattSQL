@@ -1,6 +1,7 @@
 #include "mattsql/storage/tuple_codec.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/value_utils.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -78,21 +79,6 @@ void append_i64(std::vector<std::byte> &bytes, std::int64_t value) {
   return true;
 }
 
-[[nodiscard]] bool value_matches_type(const Value &value, SqlType type) {
-  switch (type) {
-  case SqlType::Integer:
-    return std::holds_alternative<std::int64_t>(value);
-  case SqlType::Text:
-    return std::holds_alternative<std::string>(value);
-  case SqlType::Boolean:
-    return std::holds_alternative<bool>(value);
-  case SqlType::Null:
-    return std::holds_alternative<NullValue>(value);
-  }
-
-  return false;
-}
-
 } // namespace
 
 Result<Tuple> BinaryTupleCodec::Encode(const TableSchema &schema,
@@ -116,7 +102,7 @@ Result<Tuple> BinaryTupleCodec::Encode(const TableSchema &schema,
       continue;
     }
 
-    if (!value_matches_type(value, column.type)) {
+    if (!ValueMatchesType(value, column.type)) {
       return error_result<Tuple>(ErrorCode::TypeMismatch,
                                  "value type does not match column: " + column.name);
     }

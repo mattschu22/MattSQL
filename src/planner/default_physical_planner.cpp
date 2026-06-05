@@ -1,5 +1,6 @@
 #include "mattsql/planner/default_physical_planner.hpp"
 
+#include "mattsql/binder/expression_utils.hpp"
 #include "mattsql/common/result_utils.hpp"
 
 #include <memory>
@@ -10,144 +11,6 @@
 
 namespace mattsql {
 namespace {
-
-[[nodiscard]] Result<BoundExpressionPtr>
-clone_expression(const BoundExpression &expression);
-
-[[nodiscard]] Result<BoundExpressionPtr>
-clone_literal(const BoundLiteralExpression &expression) {
-  auto clone = std::make_unique<BoundLiteralExpression>();
-  clone->kind = BoundExpressionKind::Literal;
-  clone->type = expression.type;
-  clone->value = expression.value;
-  return ok_result<BoundExpressionPtr>(std::move(clone));
-}
-
-[[nodiscard]] Result<BoundExpressionPtr>
-clone_column(const BoundColumnExpression &expression) {
-  auto clone = std::make_unique<BoundColumnExpression>();
-  clone->kind = BoundExpressionKind::Column;
-  clone->type = expression.type;
-  clone->table_id = expression.table_id;
-  clone->column_id = expression.column_id;
-  clone->table_name = expression.table_name;
-  clone->column_name = expression.column_name;
-  return ok_result<BoundExpressionPtr>(std::move(clone));
-}
-
-[[nodiscard]] Result<BoundExpressionPtr>
-clone_unary(const BoundUnaryExpression &expression) {
-  if (expression.operand == nullptr) {
-    return error_result<BoundExpressionPtr>(ErrorCode::PlanError,
-                                            "unary expression is missing its operand");
-  }
-
-  auto operand = clone_expression(*expression.operand);
-  if (!status_ok(operand.status)) {
-    return operand;
-  }
-
-  auto clone = std::make_unique<BoundUnaryExpression>();
-  clone->kind = BoundExpressionKind::Unary;
-  clone->type = expression.type;
-  clone->op = expression.op;
-  clone->operand = std::move(*operand.value);
-  return ok_result<BoundExpressionPtr>(std::move(clone));
-}
-
-[[nodiscard]] Result<BoundExpressionPtr>
-clone_binary(const BoundBinaryExpression &expression) {
-  if (expression.left == nullptr || expression.right == nullptr) {
-    return error_result<BoundExpressionPtr>(ErrorCode::PlanError,
-                                            "binary expression is missing an operand");
-  }
-
-  auto left = clone_expression(*expression.left);
-  if (!status_ok(left.status)) {
-    return left;
-  }
-
-  auto right = clone_expression(*expression.right);
-  if (!status_ok(right.status)) {
-    return right;
-  }
-
-  auto clone = std::make_unique<BoundBinaryExpression>();
-  clone->kind = BoundExpressionKind::Binary;
-  clone->type = expression.type;
-  clone->left = std::move(*left.value);
-  clone->op = expression.op;
-  clone->right = std::move(*right.value);
-  return ok_result<BoundExpressionPtr>(std::move(clone));
-}
-
-[[nodiscard]] Result<BoundExpressionPtr>
-clone_star(const BoundStarExpression &expression) {
-  (void)expression;
-  return error_result<BoundExpressionPtr>(
-      ErrorCode::PlanError,
-      "star expressions must be expanded before physical planning");
-}
-
-[[nodiscard]] Result<BoundExpressionPtr>
-clone_expression(const BoundExpression &expression) {
-  if (const auto *literal = dynamic_cast<const BoundLiteralExpression *>(&expression)) {
-    return clone_literal(*literal);
-  }
-  if (const auto *column = dynamic_cast<const BoundColumnExpression *>(&expression)) {
-    return clone_column(*column);
-  }
-  if (const auto *unary = dynamic_cast<const BoundUnaryExpression *>(&expression)) {
-    return clone_unary(*unary);
-  }
-  if (const auto *binary = dynamic_cast<const BoundBinaryExpression *>(&expression)) {
-    return clone_binary(*binary);
-  }
-  if (const auto *star = dynamic_cast<const BoundStarExpression *>(&expression)) {
-    return clone_star(*star);
-  }
-
-  return error_result<BoundExpressionPtr>(ErrorCode::PlanError,
-                                          "unsupported bound expression");
-}
-
-[[nodiscard]] Result<std::vector<BoundExpressionPtr>>
-clone_expressions(const std::vector<BoundExpressionPtr> &expressions) {
-  std::vector<BoundExpressionPtr> clones;
-  clones.reserve(expressions.size());
-
-  for (const auto &expression : expressions) {
-    if (expression == nullptr) {
-      return error_result<std::vector<BoundExpressionPtr>>(
-          ErrorCode::PlanError, "expression list contains a null expression");
-    }
-
-    auto clone = clone_expression(*expression);
-    if (!status_ok(clone.status)) {
-      return error_result<std::vector<BoundExpressionPtr>>(std::move(clone.status));
-    }
-    clones.push_back(std::move(*clone.value));
-  }
-
-  return ok_result(std::move(clones));
-}
-
-[[nodiscard]] Result<std::vector<std::vector<BoundExpressionPtr>>>
-clone_expression_rows(const std::vector<std::vector<BoundExpressionPtr>> &rows) {
-  std::vector<std::vector<BoundExpressionPtr>> clones;
-  clones.reserve(rows.size());
-
-  for (const auto &row : rows) {
-    auto clone = clone_expressions(row);
-    if (!status_ok(clone.status)) {
-      return error_result<std::vector<std::vector<BoundExpressionPtr>>>(
-          std::move(clone.status));
-    }
-    clones.push_back(std::move(*clone.value));
-  }
-
-  return ok_result(std::move(clones));
-}
 
 [[nodiscard]] TableStorageReference
 make_table_storage_reference(const TableInfo &table) {
@@ -221,7 +84,7 @@ plan_create_table(const LogicalCreateTable &logical) {
     return error_result<PhysicalPlanPtr>(child_status);
   }
 
-  auto rows = clone_expression_rows(logical.rows);
+  auto rows = CloneBoundExpressionRows(logical.rows);
   if (!status_ok(rows.status)) {
     return error_result<PhysicalPlanPtr>(std::move(rows.status));
   }
@@ -269,7 +132,7 @@ plan_create_table(const LogicalCreateTable &logical) {
     return error_result<PhysicalPlanPtr>(std::move(children.status));
   }
 
-  auto predicate = clone_expression(*logical.predicate);
+  auto predicate = CloneBoundExpression(*logical.predicate);
   if (!status_ok(predicate.status)) {
     return error_result<PhysicalPlanPtr>(std::move(predicate.status));
   }
@@ -302,7 +165,7 @@ plan_projection(const LogicalProjection &logical) {
     return error_result<PhysicalPlanPtr>(std::move(children.status));
   }
 
-  auto projections = clone_expressions(logical.projections);
+  auto projections = CloneBoundExpressions(logical.projections);
   if (!status_ok(projections.status)) {
     return error_result<PhysicalPlanPtr>(std::move(projections.status));
   }

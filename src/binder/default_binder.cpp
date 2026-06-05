@@ -1,8 +1,9 @@
 #include "mattsql/binder/default_binder.hpp"
 
+#include "mattsql/binder/expression_utils.hpp"
+#include "mattsql/common/identifier.hpp"
 #include "mattsql/common/result_utils.hpp"
 
-#include <cctype>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -14,20 +15,6 @@
 
 namespace mattsql {
 namespace {
-
-[[nodiscard]] std::string lowercase_key(std::string_view value) {
-  std::string key;
-  key.reserve(value.size());
-
-  // Identifier lookup follows the catalog's case-insensitive key policy while
-  // preserving source spelling in returned bound metadata.
-  for (const char character : value) {
-    key.push_back(
-        static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
-  }
-
-  return key;
-}
 
 [[nodiscard]] SqlType to_sql_type(TypeName type) {
   switch (type) {
@@ -77,41 +64,21 @@ struct ColumnNameParts {
   }
 
   if (!parts.value->qualifier.empty() &&
-      lowercase_key(parts.value->qualifier) != lowercase_key(table.name)) {
+      FoldIdentifierKey(parts.value->qualifier) != FoldIdentifierKey(table.name)) {
     return error_result<ColumnSchema>(ErrorCode::BindError,
                                       "column reference uses unknown table: " +
                                           parts.value->qualifier);
   }
 
-  const auto lookup_name = lowercase_key(parts.value->column);
+  const auto lookup_name = FoldIdentifierKey(parts.value->column);
   for (const auto &column : table.schema.columns) {
-    if (lowercase_key(column.name) == lookup_name) {
+    if (FoldIdentifierKey(column.name) == lookup_name) {
       return ok_result(column);
     }
   }
 
   return error_result<ColumnSchema>(ErrorCode::BindError,
                                     "unknown column: " + std::string(name));
-}
-
-[[nodiscard]] BoundExpressionPtr make_literal(Value value, SqlType type) {
-  auto bound = std::make_unique<BoundLiteralExpression>();
-  bound->kind = BoundExpressionKind::Literal;
-  bound->type = type;
-  bound->value = std::move(value);
-  return bound;
-}
-
-[[nodiscard]] BoundExpressionPtr make_bound_column(const TableInfo &table,
-                                                   const ColumnSchema &column) {
-  auto bound = std::make_unique<BoundColumnExpression>();
-  bound->kind = BoundExpressionKind::Column;
-  bound->type = column.type;
-  bound->table_id = table.id;
-  bound->column_id = column.id;
-  bound->table_name = table.name;
-  bound->column_name = column.name;
-  return bound;
 }
 
 [[nodiscard]] bool is_boolean_integer_literal(const BoundExpression &expression) {
@@ -222,7 +189,7 @@ struct ColumnNameParts {
     return error_result<BoundExpressionPtr>(std::move(column.status));
   }
 
-  return ok_result(make_bound_column(*table, *column.value));
+  return ok_result(MakeBoundColumn(*table, *column.value));
 }
 
 [[nodiscard]] Result<BoundExpressionPtr> bind_unary(const UnaryExpression &expression,
@@ -315,16 +282,16 @@ struct ColumnNameParts {
 [[nodiscard]] Result<BoundExpressionPtr> bind_expression(const Expression &expression,
                                                          const TableInfo *table) {
   if (const auto *literal = dynamic_cast<const IntegerLiteral *>(&expression)) {
-    return ok_result(make_literal(literal->value, SqlType::Integer));
+    return ok_result(MakeBoundLiteral(literal->value, SqlType::Integer));
   }
   if (const auto *literal = dynamic_cast<const StringLiteral *>(&expression)) {
-    return ok_result(make_literal(literal->value, SqlType::Text));
+    return ok_result(MakeBoundLiteral(literal->value, SqlType::Text));
   }
   if (const auto *literal = dynamic_cast<const BooleanLiteral *>(&expression)) {
-    return ok_result(make_literal(literal->value, SqlType::Boolean));
+    return ok_result(MakeBoundLiteral(literal->value, SqlType::Boolean));
   }
   if (dynamic_cast<const NullLiteral *>(&expression) != nullptr) {
-    return ok_result(make_literal(NullValue{}, SqlType::Null));
+    return ok_result(MakeBoundLiteral(NullValue{}, SqlType::Null));
   }
   if (const auto *column = dynamic_cast<const ColumnRef *>(&expression)) {
     return bind_column(*column, table);
@@ -381,7 +348,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
                                              "column name is required");
     }
 
-    const auto column_key = lowercase_key(parsed_column.name);
+    const auto column_key = FoldIdentifierKey(parsed_column.name);
     if (!column_names.insert(column_key).second) {
       return error_result<BoundStatementPtr>(ErrorCode::BindError,
                                              "duplicate column name");
@@ -462,7 +429,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
       // Expand stars during binding so planning/execution sees concrete column
       // references with stable catalog identifiers.
       for (const auto &column : table->schema.columns) {
-        bound->projections.push_back(make_bound_column(*table, column));
+        bound->projections.push_back(MakeBoundColumn(*table, column));
         bound->projection_names.push_back(column.name);
       }
       continue;

@@ -1,7 +1,8 @@
 #include "mattsql/parser/parser.hpp"
 
+#include "mattsql/common/identifier.hpp"
+
 #include <algorithm>
-#include <cctype>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -11,19 +12,6 @@
 
 namespace mattsql {
 namespace {
-
-/// Returns a lowercase copy of the input text for case-insensitive matching.
-[[nodiscard]] std::string lowercase(std::string_view text) {
-  std::string lowered;
-  lowered.reserve(text.size());
-
-  for (const auto character : text) {
-    lowered.push_back(
-        static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
-  }
-
-  return lowered;
-}
 
 /// Decodes a quoted SQL string token into its AST literal value.
 [[nodiscard]] std::string unescape_sql_string(std::string_view lexeme) {
@@ -383,7 +371,7 @@ UnaryOperator Parser::TokenToUnaryOperator(TokenType type) {
 /// Parses a supported column type name for CREATE TABLE.
 TypeName Parser::ParseTypeName() {
   const auto &token = Consume(TokenType::Identifier, "expected column type");
-  const auto type_name = lowercase(token.lexeme);
+  const auto type_name = FoldIdentifierKey(token.lexeme);
 
   if (type_name == "int" || type_name == "integer") {
     return TypeName::Int;

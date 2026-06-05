@@ -1,9 +1,9 @@
 #include "mattsql/catalog/in_memory_catalog.hpp"
 
+#include "mattsql/common/identifier.hpp"
 #include "mattsql/common/result_utils.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <limits>
 #include <memory>
 #include <string>
@@ -12,20 +12,6 @@
 
 namespace mattsql {
 namespace {
-
-[[nodiscard]] std::string catalog_key(std::string_view value) {
-  std::string key;
-  key.reserve(value.size());
-
-  // SQL identifiers are treated case-insensitively in this hosted catalog while
-  // the original spelling is preserved in returned TableInfo/IndexInfo values.
-  for (const char character : value) {
-    key.push_back(
-        static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
-  }
-
-  return key;
-}
 
 [[nodiscard]] Status validate_column(const ColumnSchema &column) {
   if (column.name.empty()) {
@@ -66,7 +52,7 @@ Result<TableInfo> InMemoryCatalog::CreateTable(const CreateTableRequest &request
                                    "table must have at least one column");
   }
 
-  const auto table_key = catalog_key(request.name);
+  const auto table_key = FoldIdentifierKey(request.name);
   const auto existing_table = hosted_api_->LoadTable(table_key);
   if (status_ok(existing_table.status)) {
     return error_result<TableInfo>(ErrorCode::AlreadyExists, "table already exists");
@@ -96,7 +82,7 @@ Result<TableInfo> InMemoryCatalog::CreateTable(const CreateTableRequest &request
       return error_result<TableInfo>(column_status.code, column_status.message);
     }
 
-    const auto column_key = catalog_key(column.name);
+    const auto column_key = FoldIdentifierKey(column.name);
     if (!column_names.insert(column_key).second) {
       return error_result<TableInfo>(ErrorCode::AlreadyExists, "duplicate column name");
     }
@@ -115,12 +101,12 @@ Result<TableInfo> InMemoryCatalog::CreateTable(const CreateTableRequest &request
 }
 
 Status InMemoryCatalog::DropTable(std::string_view table_name) {
-  const auto table_key = catalog_key(table_name);
+  const auto table_key = FoldIdentifierKey(table_name);
   return hosted_api_->EraseTable(table_key);
 }
 
 Result<TableInfo> InMemoryCatalog::GetTable(std::string_view table_name) const {
-  const auto table_key = catalog_key(table_name);
+  const auto table_key = FoldIdentifierKey(table_name);
   return hosted_api_->LoadTable(table_key);
 }
 
@@ -160,13 +146,13 @@ Result<IndexInfo> InMemoryCatalog::CreateIndex(const CreateIndexRequest &request
                                    "index must have at least one key column");
   }
 
-  const auto table_key = catalog_key(request.table_name);
+  const auto table_key = FoldIdentifierKey(request.table_name);
   const auto table = hosted_api_->LoadTable(table_key);
   if (!status_ok(table.status)) {
     return error_result<IndexInfo>(table.status.code, table.status.message);
   }
 
-  const auto index_key = catalog_key(request.schema.name);
+  const auto index_key = FoldIdentifierKey(request.schema.name);
   const auto existing_index = hosted_api_->LoadIndex(table_key, index_key);
   if (status_ok(existing_index.status)) {
     return error_result<IndexInfo>(ErrorCode::AlreadyExists, "index already exists");
@@ -206,8 +192,8 @@ Result<IndexInfo> InMemoryCatalog::CreateIndex(const CreateIndexRequest &request
 
 Result<IndexInfo> InMemoryCatalog::GetIndex(std::string_view table_name,
                                             std::string_view index_name) const {
-  const auto table_key = catalog_key(table_name);
-  const auto index_key = catalog_key(index_name);
+  const auto table_key = FoldIdentifierKey(table_name);
+  const auto index_key = FoldIdentifierKey(index_name);
   return hosted_api_->LoadIndex(table_key, index_key);
 }
 

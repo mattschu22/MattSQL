@@ -30,6 +30,7 @@ endfunction()
 add_library(
   mattsql_core
   src/binder/default_binder.cpp
+  src/binder/expression_utils.cpp
   src/catalog/hosted_catalog_api.cpp
   src/catalog/in_memory_catalog.cpp
   src/execution/default_executor.cpp
@@ -38,7 +39,9 @@ add_library(
   src/parser/parser.cpp
   src/planner/default_logical_planner.cpp
   src/planner/default_physical_planner.cpp
+  src/runtime/c_abi_platform_runtime.cpp
   src/runtime/hosted_platform_runtime.cpp
+  src/runtime/platform.cpp
   src/sql_engine.cpp
   src/storage/in_memory_table_storage.cpp
   src/storage/memory_block_device.cpp
@@ -65,9 +68,12 @@ include(CTest)
 if(BUILD_TESTING)
   add_executable(
     mattsql_tests
+    tests/abi_layout_tests.cpp
     tests/binder_tests.cpp
+    tests/c_abi_platform_runtime_tests.cpp
     tests/catalog_tests.cpp
     tests/executor_tests.cpp
+    tests/hosted_platform_runtime_tests.cpp
     tests/in_memory_table_storage_tests.cpp
     tests/interface_compile_tests.cpp
     tests/lexer_tests.cpp
@@ -79,6 +85,7 @@ if(BUILD_TESTING)
     tests/page_heap_table_tests.cpp
     tests/slotted_page_tests.cpp
     tests/sql_engine_tests.cpp
+    tests/sql_logic_support.cpp
     tests/sql_logic_tests.cpp
     tests/test_main.cpp
   )
@@ -91,4 +98,21 @@ if(BUILD_TESTING)
   mattsql_apply_warnings(mattsql_tests)
 
   add_test(NAME mattsql.tests COMMAND mattsql_tests)
+
+  find_program(MATTSQL_RUSTC rustc)
+  if(MATTSQL_RUSTC)
+    add_test(
+      NAME mattsql.rust_abi_layout
+      COMMAND
+        ${MATTSQL_RUSTC}
+        --edition=2021
+        --crate-type
+        lib
+        --emit
+        metadata
+        -o
+        ${CMAKE_CURRENT_BINARY_DIR}/mattsql_abi_runtime_layout.rmeta
+        ${PROJECT_SOURCE_DIR}/tests/rust/abi_runtime_layout.rs
+    )
+  endif()
 endif()

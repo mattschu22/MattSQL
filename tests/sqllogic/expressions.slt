@@ -24,8 +24,22 @@ SELECT 'b' > 'a' AS text_gt, 'a' <= 'a' AS text_le, true AND false OR true AS bo
 text_gt\ttext_le\tbool_order
 true\ttrue\ttrue
 
+query
+SELECT false AND 1 / 0 = 0 AS guarded_and, true OR 1 / 0 = 0 AS guarded_or;
+----
+guarded_and\tguarded_or
+false\ttrue
+
 statement error ExecutionError
 SELECT 1 / 0 AS broken;
+----
+
+statement error ExecutionError
+SELECT true AND 1 / 0 = 0 AS unguarded_and;
+----
+
+statement error ExecutionError
+SELECT false OR 1 / 0 = 0 AS unguarded_or;
 ----
 
 statement error TypeMismatch

@@ -7,6 +7,24 @@
 #include <string>
 #include <variant>
 
+namespace {
+
+class ReadOnlyTransaction final : public mattsql::Transaction {
+public:
+  mattsql::TransactionId Id() const override { return 99; }
+  mattsql::TransactionMode Mode() const override {
+    return mattsql::TransactionMode::ReadOnly;
+  }
+  mattsql::TransactionState State() const override {
+    return mattsql::TransactionState::Active;
+  }
+  mattsql::LogSequenceNumber BeginLsn() const override {
+    return mattsql::LogSequenceNumber{0};
+  }
+};
+
+} // namespace
+
 /// Verifies the default SQL engine can select a numeric literal.
 TEST_CASE(default_sql_engine_selects_numeric_literal) {
   mattsql::DefaultSqlEngine engine;
@@ -97,22 +115,25 @@ TEST_CASE(default_sql_engine_returns_status_errors) {
               mattsql::ErrorCode::ParseError);
 }
 
+/// Verifies read-only transactions can still execute read statements.
+TEST_CASE(default_sql_engine_allows_reads_in_read_only_transactions) {
+  mattsql::DefaultSqlEngine engine;
+
+  EXPECT_TRUE(
+      mattsql::status_ok(engine.Execute("CREATE TABLE users (id INT);").status));
+  EXPECT_TRUE(
+      mattsql::status_ok(engine.Execute("INSERT INTO users VALUES (7);").status));
+
+  ReadOnlyTransaction transaction;
+  const auto result = engine.Execute("SELECT id FROM users;", transaction);
+
+  EXPECT_TRUE(mattsql::status_ok(result.status));
+  EXPECT_EQ(result.value->rows.size(), 1U);
+  EXPECT_EQ(std::get<std::int64_t>(result.value->rows[0][0]), std::int64_t{7});
+}
+
 /// Verifies caller-supplied transactions are honored.
 TEST_CASE(default_sql_engine_uses_supplied_transaction) {
-  class ReadOnlyTransaction final : public mattsql::Transaction {
-  public:
-    mattsql::TransactionId Id() const override { return 99; }
-    mattsql::TransactionMode Mode() const override {
-      return mattsql::TransactionMode::ReadOnly;
-    }
-    mattsql::TransactionState State() const override {
-      return mattsql::TransactionState::Active;
-    }
-    mattsql::LogSequenceNumber BeginLsn() const override {
-      return mattsql::LogSequenceNumber{0};
-    }
-  };
-
   mattsql::DefaultSqlEngine engine;
   ReadOnlyTransaction transaction;
 

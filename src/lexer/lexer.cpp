@@ -1,6 +1,8 @@
 #include "mattsql/lexer/lexer.hpp"
 #include "mattsql/lexer/token.hpp"
 
+#include "mattsql/common/identifier.hpp"
+
 #include <cctype>
 #include <stdexcept>
 #include <string>
@@ -276,13 +278,7 @@ bool Lexer::IsAlphaNumeric(char c) { return IsAlpha(c) || IsDigit(c); }
 TokenType Lexer::LookupKeyword(std::string_view text) {
   // Keyword recognition is case-insensitive, while token lexemes retain the
   // original casing from the input.
-  std::string lowered;
-  lowered.reserve(text.size());
-
-  for (const auto character : text) {
-    lowered.push_back(
-        static_cast<char>(std::tolower(static_cast<unsigned char>(character))));
-  }
+  const auto lowered = FoldIdentifierKey(text);
 
   if (lowered == "select") {
     return TokenType::Select;

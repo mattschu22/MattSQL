@@ -1,6 +1,7 @@
 #include "mattsql/execution/default_executor.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/value_utils.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -25,71 +26,6 @@ struct ExecutionResult {
   std::vector<std::vector<Value>> rows;
 };
 
-[[nodiscard]] bool is_null(const Value &value) {
-  return std::holds_alternative<NullValue>(value);
-}
-
-[[nodiscard]] Result<std::int64_t> require_integer(const Value &value,
-                                                   std::string_view context) {
-  if (const auto *integer = std::get_if<std::int64_t>(&value)) {
-    return ok_result(*integer);
-  }
-
-  return error_result<std::int64_t>(
-      ErrorCode::TypeMismatch, std::string(context) + " requires INTEGER operands");
-}
-
-[[nodiscard]] Result<bool> require_boolean(const Value &value,
-                                           std::string_view context) {
-  if (const auto *boolean = std::get_if<bool>(&value)) {
-    return ok_result(*boolean);
-  }
-
-  return error_result<bool>(ErrorCode::TypeMismatch,
-                            std::string(context) + " requires BOOLEAN operands");
-}
-
-[[nodiscard]] Result<int> compare_values(const Value &left, const Value &right) {
-  if (is_null(left) || is_null(right)) {
-    return error_result<int>(ErrorCode::ExecutionError, "cannot compare NULL values");
-  }
-
-  const auto left_integral =
-      std::holds_alternative<std::int64_t>(left) || std::holds_alternative<bool>(left);
-  const auto right_integral = std::holds_alternative<std::int64_t>(right) ||
-                              std::holds_alternative<bool>(right);
-  if (left_integral && right_integral) {
-    const auto left_value = std::holds_alternative<bool>(left)
-                                ? (std::get<bool>(left) ? 1 : 0)
-                                : std::get<std::int64_t>(left);
-    const auto right_value = std::holds_alternative<bool>(right)
-                                 ? (std::get<bool>(right) ? 1 : 0)
-                                 : std::get<std::int64_t>(right);
-    if (left_value < right_value) {
-      return ok_result(-1);
-    }
-    if (right_value < left_value) {
-      return ok_result(1);
-    }
-    return ok_result(0);
-  }
-
-  const auto *left_string = std::get_if<std::string>(&left);
-  const auto *right_string = std::get_if<std::string>(&right);
-  if (left_string != nullptr && right_string != nullptr) {
-    if (*left_string < *right_string) {
-      return ok_result(-1);
-    }
-    if (*right_string < *left_string) {
-      return ok_result(1);
-    }
-    return ok_result(0);
-  }
-
-  return error_result<int>(ErrorCode::TypeMismatch,
-                           "cannot compare values with different types");
-}
-
 [[nodiscard]] Result<Value> evaluate_expression(const BoundExpression &expression,
                                                 const RowContext &context);
 
@@ -107,21 +43,21 @@ struct ExecutionResult {
 
   switch (expression.op) {
   case UnaryOperator::Plus: {
-    auto integer = require_integer(*operand.value, "unary plus");
+    auto integer = RequireInteger(*operand.value, "unary plus");
     if (!status_ok(integer.status)) {
       return error_result<Value>(integer.status);
     }
     return ok_result<Value>(*integer.value);
   }
   case UnaryOperator::Minus: {
-    auto integer = require_integer(*operand.value, "unary minus");
+    auto integer = RequireInteger(*operand.value, "unary minus");
     if (!status_ok(integer.status)) {
       return error_result<Value>(integer.status);
     }
     return ok_result<Value>(-*integer.value);
   }
   case UnaryOperator::Not: {
-    auto boolean = require_boolean(*operand.value, "NOT");
+    auto boolean = RequireBoolean(*operand.value, "NOT");
     if (!status_ok(boolean.status)) {
       return error_result<Value>(boolean.status);
     }
@@ -144,7 +80,7 @@ struct ExecutionResult {
     if (!status_ok(left.status)) {
       return left;
     }
-    auto left_boolean = require_boolean(*left.value, "AND");
+    auto left_boolean = RequireBoolean(*left.value, "AND");
     if (!status_ok(left_boolean.status)) {
       return error_result<Value>(left_boolean.status);
     }
@@ -156,7 +92,7 @@ struct ExecutionResult {
     if (!status_ok(right.status)) {
       return right;
     }
-    auto right_boolean = require_boolean(*right.value, "AND");
+    auto right_boolean = RequireBoolean(*right.value, "AND");
     if (!status_ok(right_boolean.status)) {
       return error_result<Value>(right_boolean.status);
     }
@@ -168,7 +104,7 @@ struct ExecutionResult {
     if (!status_ok(left.status)) {
       return left;
     }
-    auto left_boolean = require_boolean(*left.value, "OR");
+    auto left_boolean = RequireBoolean(*left.value, "OR");
     if (!status_ok(left_boolean.status)) {
       return error_result<Value>(left_boolean.status);
     }
@@ -180,7 +116,7 @@ struct ExecutionResult {
     if (!status_ok(right.status)) {
       return right;
     }
-    auto right_boolean = require_boolean(*right.value, "OR");
+    auto right_boolean = RequireBoolean(*right.value, "OR");
     if (!status_ok(right_boolean.status)) {
       return error_result<Value>(right_boolean.status);
     }
@@ -199,8 +135,8 @@ struct ExecutionResult {
 
   switch (expression.op) {
   case BinaryOperator::Add: {
-    auto left_integer = require_integer(*left.value, "addition");
-    auto right_integer = require_integer(*right.value, "addition");
+    auto left_integer = RequireInteger(*left.value, "addition");
+    auto right_integer = RequireInteger(*right.value, "addition");
     if (!status_ok(left_integer.status)) {
       return error_result<Value>(left_integer.status);
     }
@@ -210,8 +146,8 @@ struct ExecutionResult {
     return ok_result<Value>(*left_integer.value + *right_integer.value);
   }
   case BinaryOperator::Subtract: {
-    auto left_integer = require_integer(*left.value, "subtraction");
-    auto right_integer = require_integer(*right.value, "subtraction");
+    auto left_integer = RequireInteger(*left.value, "subtraction");
+    auto right_integer = RequireInteger(*right.value, "subtraction");
     if (!status_ok(left_integer.status)) {
       return error_result<Value>(left_integer.status);
     }
@@ -221,8 +157,8 @@ struct ExecutionResult {
     return ok_result<Value>(*left_integer.value - *right_integer.value);
   }
   case BinaryOperator::Multiply: {
-    auto left_integer = require_integer(*left.value, "multiplication");
-    auto right_integer = require_integer(*right.value, "multiplication");
+    auto left_integer = RequireInteger(*left.value, "multiplication");
+    auto right_integer = RequireInteger(*right.value, "multiplication");
     if (!status_ok(left_integer.status)) {
       return error_result<Value>(left_integer.status);
     }
@@ -232,8 +168,8 @@ struct ExecutionResult {
     return ok_result<Value>(*left_integer.value * *right_integer.value);
   }
   case BinaryOperator::Divide: {
-    auto left_integer = require_integer(*left.value, "division");
-    auto right_integer = require_integer(*right.value, "division");
+    auto left_integer = RequireInteger(*left.value, "division");
+    auto right_integer = RequireInteger(*right.value, "division");
     if (!status_ok(left_integer.status)) {
       return error_result<Value>(left_integer.status);
     }
@@ -246,20 +182,20 @@ struct ExecutionResult {
     return ok_result<Value>(*left_integer.value / *right_integer.value);
   }
   case BinaryOperator::Equal:
-    if (is_null(*left.value) || is_null(*right.value)) {
+    if (IsNull(*left.value) || IsNull(*right.value)) {
       return ok_result<Value>(false);
     }
-    if (auto comparison = compare_values(*left.value, *right.value);
+    if (auto comparison = CompareValues(*left.value, *right.value);
         status_ok(comparison.status)) {
       return ok_result<Value>(*comparison.value == 0);
     } else {
       return error_result<Value>(comparison.status);
     }
   case BinaryOperator::NotEqual:
-    if (is_null(*left.value) || is_null(*right.value)) {
+    if (IsNull(*left.value) || IsNull(*right.value)) {
       return ok_result<Value>(false);
     }
-    if (auto comparison = compare_values(*left.value, *right.value);
+    if (auto comparison = CompareValues(*left.value, *right.value);
         status_ok(comparison.status)) {
       return ok_result<Value>(*comparison.value != 0);
     } else {
@@ -269,7 +205,7 @@ struct ExecutionResult {
   case BinaryOperator::LessEqual:
   case BinaryOperator::Greater:
   case BinaryOperator::GreaterEqual: {
-    auto comparison = compare_values(*left.value, *right.value);
+    auto comparison = CompareValues(*left.value, *right.value);
     if (!status_ok(comparison.status)) {
       return error_result<Value>(comparison.status);
     }
@@ -586,7 +522,7 @@ private:
         return error_result<ExecutionResult>(std::move(predicate.status));
       }
 
-      auto include = require_boolean(*predicate.value, "filter");
+      auto include = RequireBoolean(*predicate.value, "filter");
       if (!status_ok(include.status)) {
         return error_result<ExecutionResult>(std::move(include.status));
       }

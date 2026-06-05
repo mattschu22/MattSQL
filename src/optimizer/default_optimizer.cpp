@@ -1,6 +1,8 @@
 #include "mattsql/optimizer/default_optimizer.hpp"
 
+#include "mattsql/binder/expression_utils.hpp"
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/value_utils.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -13,41 +15,8 @@
 namespace mattsql {
 namespace {
 
-[[nodiscard]] bool is_null(const Value &value) {
-  return std::holds_alternative<NullValue>(value);
-}
-
-[[nodiscard]] SqlType value_type(const Value &value) {
-  if (std::holds_alternative<std::int64_t>(value)) {
-    return SqlType::Integer;
-  }
-  if (std::holds_alternative<std::string>(value)) {
-    return SqlType::Text;
-  }
-  if (std::holds_alternative<bool>(value)) {
-    return SqlType::Boolean;
-  }
-  return SqlType::Null;
-}
-
-[[nodiscard]] BoundExpressionPtr make_literal(Value value) {
-  auto literal = std::make_unique<BoundLiteralExpression>();
-  literal->kind = BoundExpressionKind::Literal;
-  literal->type = value_type(value);
-  literal->value = std::move(value);
-  return literal;
-}
-
-[[nodiscard]] const Value *literal_value(const BoundExpression &expression) {
-  const auto *literal = dynamic_cast<const BoundLiteralExpression *>(&expression);
-  if (literal == nullptr) {
-    return nullptr;
-  }
-  return &literal->value;
-}
-
 [[nodiscard]] std::optional<bool> boolean_literal(const BoundExpression &expression) {
-  const auto *value = literal_value(expression);
+  const auto *value = BoundLiteralValue(expression);
   if (value == nullptr) {
     return std::nullopt;
   }
@@ -55,48 +24,6 @@ namespace {
   if (const auto *boolean = std::get_if<bool>(value)) {
     return *boolean;
   }
-  return std::nullopt;
-}
-
-[[nodiscard]] std::optional<std::int64_t> integral_value(const Value &value) {
-  if (const auto *integer = std::get_if<std::int64_t>(&value)) {
-    return *integer;
-  }
-  if (const auto *boolean = std::get_if<bool>(&value)) {
-    return *boolean ? 1 : 0;
-  }
-  return std::nullopt;
-}
-
-[[nodiscard]] std::optional<int> compare_values(const Value &left, const Value &right) {
-  if (is_null(left) || is_null(right)) {
-    return std::nullopt;
-  }
-
-  const auto left_integral = integral_value(left);
-  const auto right_integral = integral_value(right);
-  if (left_integral.has_value() && right_integral.has_value()) {
-    if (*left_integral < *right_integral) {
-      return -1;
-    }
-    if (*right_integral < *left_integral) {
-      return 1;
-    }
-    return 0;
-  }
-
-  const auto *left_string = std::get_if<std::string>(&left);
-  const auto *right_string = std::get_if<std::string>(&right);
-  if (left_string != nullptr && right_string != nullptr) {
-    if (*left_string < *right_string) {
-      return -1;
-    }
-    if (*right_string < *left_string) {
-      return 1;
-    }
-    return 0;
-  }
-
   return std::nullopt;
 }
 
@@ -151,39 +78,39 @@ namespace {
                                                    const Value &right) {
   switch (op) {
   case BinaryOperator::Equal:
-    if (is_null(left) || is_null(right)) {
+    if (IsNull(left) || IsNull(right)) {
       return false;
     }
-    if (const auto comparison = compare_values(left, right)) {
-      return *comparison == 0;
+    if (auto comparison = CompareValues(left, right); status_ok(comparison.status)) {
+      return *comparison.value == 0;
     }
     return std::nullopt;
   case BinaryOperator::NotEqual:
-    if (is_null(left) || is_null(right)) {
+    if (IsNull(left) || IsNull(right)) {
       return false;
     }
-    if (const auto comparison = compare_values(left, right)) {
-      return *comparison != 0;
+    if (auto comparison = CompareValues(left, right); status_ok(comparison.status)) {
+      return *comparison.value != 0;
     }
     return std::nullopt;
   case BinaryOperator::Less:
-    if (const auto comparison = compare_values(left, right)) {
-      return *comparison < 0;
+    if (auto comparison = CompareValues(left, right); status_ok(comparison.status)) {
+      return *comparison.value < 0;
     }
     return std::nullopt;
   case BinaryOperator::LessEqual:
-    if (const auto comparison = compare_values(left, right)) {
-      return *comparison <= 0;
+    if (auto comparison = CompareValues(left, right); status_ok(comparison.status)) {
+      return *comparison.value <= 0;
     }
     return std::nullopt;
   case BinaryOperator::Greater:
-    if (const auto comparison = compare_values(left, right)) {
-      return *comparison > 0;
+    if (auto comparison = CompareValues(left, right); status_ok(comparison.status)) {
+      return *comparison.value > 0;
     }
     return std::nullopt;
   case BinaryOperator::GreaterEqual:
-    if (const auto comparison = compare_values(left, right)) {
-      return *comparison >= 0;
+    if (auto comparison = CompareValues(left, right); status_ok(comparison.status)) {
+      return *comparison.value >= 0;
     }
     return std::nullopt;
   default:
@@ -220,90 +147,46 @@ namespace {
   return fold_boolean(op, left, right);
 }
 
-[[nodiscard]] Result<BoundExpressionPtr> fold_expression(BoundExpressionPtr expression);
-
 [[nodiscard]] Result<BoundExpressionPtr>
-fold_unary_expression(std::unique_ptr<BoundUnaryExpression> expression) {
-  if (expression->operand == nullptr) {
-    return error_result<BoundExpressionPtr>(ErrorCode::PlanError,
-                                            "unary expression is missing its operand");
-  }
-
-  auto operand = fold_expression(std::move(expression->operand));
-  if (!status_ok(operand.status)) {
-    return operand;
-  }
-  expression->operand = std::move(*operand.value);
-
-  if (const auto *operand_value = literal_value(*expression->operand)) {
-    if (const auto folded = fold_unary(expression->op, *operand_value)) {
-      return ok_result(make_literal(*folded));
+fold_current_expression(BoundExpressionPtr expression) {
+  if (auto *unary = dynamic_cast<BoundUnaryExpression *>(expression.get())) {
+    if (unary->operand == nullptr) {
+      return error_result<BoundExpressionPtr>(
+          ErrorCode::PlanError, "unary expression is missing its operand");
     }
-  }
 
-  return ok_result<BoundExpressionPtr>(std::move(expression));
-}
-
-[[nodiscard]] Result<BoundExpressionPtr>
-fold_binary_expression(std::unique_ptr<BoundBinaryExpression> expression) {
-  if (expression->left == nullptr || expression->right == nullptr) {
-    return error_result<BoundExpressionPtr>(ErrorCode::PlanError,
-                                            "binary expression is missing an operand");
-  }
-
-  auto left = fold_expression(std::move(expression->left));
-  if (!status_ok(left.status)) {
-    return left;
-  }
-  expression->left = std::move(*left.value);
-
-  auto right = fold_expression(std::move(expression->right));
-  if (!status_ok(right.status)) {
-    return right;
-  }
-  expression->right = std::move(*right.value);
-
-  const auto *left_value = literal_value(*expression->left);
-  const auto *right_value = literal_value(*expression->right);
-  if (left_value != nullptr && right_value != nullptr) {
-    if (const auto folded = fold_binary(expression->op, *left_value, *right_value)) {
-      return ok_result(make_literal(*folded));
+    if (const auto *operand_value = BoundLiteralValue(*unary->operand)) {
+      if (const auto folded = fold_unary(unary->op, *operand_value)) {
+        return ok_result(MakeBoundLiteral(*folded));
+      }
     }
+
+    return ok_result(std::move(expression));
   }
 
-  return ok_result<BoundExpressionPtr>(std::move(expression));
+  if (auto *binary = dynamic_cast<BoundBinaryExpression *>(expression.get())) {
+    if (binary->left == nullptr || binary->right == nullptr) {
+      return error_result<BoundExpressionPtr>(
+          ErrorCode::PlanError, "binary expression is missing an operand");
+    }
+
+    const auto *left_value = BoundLiteralValue(*binary->left);
+    const auto *right_value = BoundLiteralValue(*binary->right);
+    if (left_value != nullptr && right_value != nullptr) {
+      if (const auto folded = fold_binary(binary->op, *left_value, *right_value)) {
+        return ok_result(MakeBoundLiteral(*folded));
+      }
+    }
+
+    return ok_result(std::move(expression));
+  }
+
+  return ok_result(std::move(expression));
 }
 
 [[nodiscard]] Result<BoundExpressionPtr>
 fold_expression(BoundExpressionPtr expression) {
-  if (expression == nullptr) {
-    return error_result<BoundExpressionPtr>(ErrorCode::PlanError,
-                                            "expression cannot be null");
-  }
-
-  if (dynamic_cast<BoundLiteralExpression *>(expression.get()) != nullptr ||
-      dynamic_cast<BoundColumnExpression *>(expression.get()) != nullptr) {
-    return ok_result(std::move(expression));
-  }
-  if (dynamic_cast<BoundStarExpression *>(expression.get()) != nullptr) {
-    return error_result<BoundExpressionPtr>(
-        ErrorCode::PlanError, "star expressions must be expanded before optimization");
-  }
-  if (auto *unary = dynamic_cast<BoundUnaryExpression *>(expression.get())) {
-    (void)unary;
-    auto owned = std::unique_ptr<BoundUnaryExpression>(
-        static_cast<BoundUnaryExpression *>(expression.release()));
-    return fold_unary_expression(std::move(owned));
-  }
-  if (auto *binary = dynamic_cast<BoundBinaryExpression *>(expression.get())) {
-    (void)binary;
-    auto owned = std::unique_ptr<BoundBinaryExpression>(
-        static_cast<BoundBinaryExpression *>(expression.release()));
-    return fold_binary_expression(std::move(owned));
-  }
-
-  return error_result<BoundExpressionPtr>(ErrorCode::PlanError,
-                                          "unsupported bound expression");
+  return TransformBoundExpression(std::move(expression), fold_current_expression);
 }
 
 [[nodiscard]] Result<LogicalPlanPtr> fold_plan(LogicalPlanPtr plan) {
