@@ -1,7 +1,14 @@
 # Runtime C ABI Contract
 
 This document defines the contract for `MATTSQL_ABI_RUNTIME_VERSION == 1` in
-`include/mattsql/abi/runtime.h`.
+[`include/mattsql/abi/runtime.h`](../../include/mattsql/abi/runtime.h).
+
+Related docs:
+
+- [Docs index](../README.md)
+- [Overview](../overview.md)
+- [Current state](../status/current_state.md)
+- [Code-level invariants](invariants.md)
 
 The C ABI is the boundary between the C++ database engine and a runtime backend
 implemented by hosted code, simulation code, or a future Rust kernel. It mirrors
@@ -58,6 +65,41 @@ Function pointers that are required for version 1:
 
 `yield` is optional. If absent, yielding is a no-op from the C++ adapter's
 perspective.
+
+## ABI Lifecycle
+
+Version 1 is kernel-ready but MVP-scoped. It is intended to support the first
+Rust kernel runtime boundary without committing SQL, scheduler, filesystem, or
+network APIs to the C ABI.
+
+Once Rust kernel code consumes a versioned ABI table, that table is frozen:
+
+- Existing field order, field size, alignment, callback signatures, constant
+  values, and status meanings must not change.
+- Reinterpreting an existing field is a breaking change, even if the C layout is
+  unchanged.
+- Breaking changes require a new `MATTSQL_ABI_RUNTIME_VERSION` value and a new
+  top-level runtime table type.
+- Additive changes may use reserved fields only when old consumers and old
+  providers can safely ignore the new meaning. Otherwise, add a new version.
+
+Each supported ABI version must carry the full boundary surface:
+
+- C header definitions.
+- C++ consumer adapter from ABI table to `PlatformRuntime`.
+- C++ provider adapter from `PlatformRuntime` to ABI table.
+- C++ layout tests for every ABI struct.
+- Rust `repr(C)` mirror and layout test.
+- Contract documentation for ownership, validation, and callback semantics.
+
+Version 1 has no negotiation beyond exact matching:
+`mattsql_abi_runtime_v1.version` must equal `MATTSQL_ABI_RUNTIME_VERSION`.
+Consumers must reject any other version. Providers must export the version they
+actually implement.
+
+Older adapters should remain available until no supported kernel or provider
+depends on them. Any ABI change must update the C header, adapters, C++ tests,
+Rust layout mirror, and this document in the same patch.
 
 ## Status Values
 

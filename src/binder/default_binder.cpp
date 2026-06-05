@@ -16,17 +16,17 @@
 namespace mattsql {
 namespace {
 
-[[nodiscard]] SqlType to_sql_type(TypeName type) {
+[[nodiscard]] Result<SqlType> to_sql_type(TypeName type) {
   switch (type) {
   case TypeName::Int:
-    return SqlType::Integer;
+    return ok_result(SqlType::Integer);
   case TypeName::Text:
-    return SqlType::Text;
+    return ok_result(SqlType::Text);
   case TypeName::Bool:
-    return SqlType::Boolean;
+    return ok_result(SqlType::Boolean);
   }
 
-  return SqlType::Null;
+  return error_result<SqlType>(ErrorCode::BindError, "unknown column type");
 }
 
 struct ColumnNameParts {
@@ -194,6 +194,11 @@ struct ColumnNameParts {
 
 [[nodiscard]] Result<BoundExpressionPtr> bind_unary(const UnaryExpression &expression,
                                                     const TableInfo *table) {
+  if (expression.operand == nullptr) {
+    return error_result<BoundExpressionPtr>(ErrorCode::BindError,
+                                            "unary expression is missing its operand");
+  }
+
   auto operand = bind_expression(*expression.operand, table);
   if (!status_ok(operand.status)) {
     return operand;
@@ -219,7 +224,6 @@ struct ColumnNameParts {
   }
 
   auto bound = std::make_unique<BoundUnaryExpression>();
-  bound->kind = BoundExpressionKind::Unary;
   bound->type = result_type;
   bound->op = expression.op;
   bound->operand = std::move(*operand.value);
@@ -228,6 +232,11 @@ struct ColumnNameParts {
 
 [[nodiscard]] Result<BoundExpressionPtr> bind_binary(const BinaryExpression &expression,
                                                      const TableInfo *table) {
+  if (expression.left == nullptr || expression.right == nullptr) {
+    return error_result<BoundExpressionPtr>(ErrorCode::BindError,
+                                            "binary expression is missing an operand");
+  }
+
   auto left = bind_expression(*expression.left, table);
   if (!status_ok(left.status)) {
     return left;
@@ -271,7 +280,6 @@ struct ColumnNameParts {
   }
 
   auto bound = std::make_unique<BoundBinaryExpression>();
-  bound->kind = BoundExpressionKind::Binary;
   bound->type = result_type;
   bound->left = std::move(*left.value);
   bound->op = expression.op;
@@ -354,15 +362,19 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
                                              "duplicate column name");
     }
 
+    auto type = to_sql_type(parsed_column.type);
+    if (!status_ok(type.status)) {
+      return error_result<BoundStatementPtr>(std::move(type.status));
+    }
+
     ColumnSchema column;
     column.name = parsed_column.name;
-    column.type = to_sql_type(parsed_column.type);
+    column.type = *type.value;
     column.id = static_cast<ColumnId>(index);
     request.schema.columns.push_back(std::move(column));
   }
 
   auto bound = std::make_unique<BoundCreateTableStatement>();
-  bound->kind = BoundStatementKind::CreateTable;
   bound->request = std::move(request);
   return ok_result<BoundStatementPtr>(std::move(bound));
 }
@@ -380,11 +392,15 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
   }
 
   auto bound = std::make_unique<BoundInsertStatement>();
-  bound->kind = BoundStatementKind::Insert;
   bound->table = *table.value;
   bound->values.reserve(statement.values.size());
 
   for (std::size_t index = 0; index < statement.values.size(); ++index) {
+    if (statement.values[index] == nullptr) {
+      return error_result<BoundStatementPtr>(ErrorCode::BindError,
+                                             "INSERT value cannot be null");
+    }
+
     auto expression = bind_expression(*statement.values[index], nullptr);
     if (!status_ok(expression.status)) {
       return error_result<BoundStatementPtr>(std::move(expression.status));
@@ -405,7 +421,6 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
 [[nodiscard]] Result<BoundStatementPtr> bind_select(const SelectStatement &statement,
                                                     Catalog &catalog) {
   auto bound = std::make_unique<BoundSelectStatement>();
-  bound->kind = BoundStatementKind::Select;
 
   const TableInfo *table = nullptr;
   if (!statement.table_name.empty()) {
@@ -420,6 +435,11 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
   bound->projections.reserve(statement.projections.size());
   bound->projection_names.reserve(statement.projections.size());
   for (const auto &projection : statement.projections) {
+    if (projection.expression == nullptr) {
+      return error_result<BoundStatementPtr>(ErrorCode::BindError,
+                                             "SELECT projection cannot be null");
+    }
+
     if (dynamic_cast<const StarExpression *>(projection.expression.get()) != nullptr) {
       if (table == nullptr) {
         return error_result<BoundStatementPtr>(ErrorCode::BindError,

@@ -4,6 +4,7 @@
 #include "test_framework.hpp"
 
 #include <cstddef>
+#include <limits>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -155,6 +156,8 @@ TEST_CASE(page_heap_table_rejects_invalid_requests) {
   const auto too_large = bytes_of("this record cannot fit");
   EXPECT_TRUE(heap.Insert(transaction, view_of(too_large)).status.code ==
               mattsql::ErrorCode::InvalidArgument);
+  EXPECT_EQ(heap.PageCount(), 0U);
+  EXPECT_EQ(heap.RecordCount(), 0U);
 
   const auto bytes = bytes_of("x");
   const auto inserted = heap.Insert(transaction, view_of(bytes));
@@ -165,4 +168,21 @@ TEST_CASE(page_heap_table_rejects_invalid_requests) {
               mattsql::ErrorCode::NotFound);
   EXPECT_TRUE(heap.Delete(transaction, missing_slot).code ==
               mattsql::ErrorCode::NotFound);
+}
+
+/// Verifies heaps reject page id allocation once the valid id range is exhausted.
+TEST_CASE(page_heap_table_rejects_page_id_exhaustion) {
+  mattsql::PageHeapTable heap(std::numeric_limits<mattsql::PageId>::max() - 1U, 24);
+  TestTransaction transaction;
+  const auto record = bytes_of("abcdefghij");
+
+  const auto first = heap.Insert(transaction, view_of(record));
+  EXPECT_TRUE(mattsql::status_ok(first.status));
+  EXPECT_EQ(first.value->page_id,
+            std::numeric_limits<mattsql::PageId>::max() - 1U);
+
+  const auto second = heap.Insert(transaction, view_of(record));
+  EXPECT_TRUE(second.status.code == mattsql::ErrorCode::Internal);
+  EXPECT_EQ(heap.PageCount(), 1U);
+  EXPECT_EQ(heap.RecordCount(), 1U);
 }

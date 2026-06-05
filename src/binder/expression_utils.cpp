@@ -15,7 +15,6 @@ BoundExpressionPtr MakeBoundLiteral(Value value) {
 
 BoundExpressionPtr MakeBoundLiteral(Value value, SqlType type) {
   auto bound = std::make_unique<BoundLiteralExpression>();
-  bound->kind = BoundExpressionKind::Literal;
   bound->type = type;
   bound->value = std::move(value);
   return bound;
@@ -23,7 +22,6 @@ BoundExpressionPtr MakeBoundLiteral(Value value, SqlType type) {
 
 BoundExpressionPtr MakeBoundColumn(const TableInfo &table, const ColumnSchema &column) {
   auto bound = std::make_unique<BoundColumnExpression>();
-  bound->kind = BoundExpressionKind::Column;
   bound->type = column.type;
   bound->table_id = table.id;
   bound->column_id = column.id;
@@ -34,19 +32,18 @@ BoundExpressionPtr MakeBoundColumn(const TableInfo &table, const ColumnSchema &c
 
 const Value *BoundLiteralValue(const BoundExpression &expression) {
   const auto *literal = dynamic_cast<const BoundLiteralExpression *>(&expression);
-  if (literal == nullptr) {
-    return nullptr;
-  }
-  return &literal->value;
+  return literal == nullptr ? nullptr : &literal->value;
 }
 
 Result<BoundExpressionPtr> CloneBoundExpression(const BoundExpression &expression) {
-  if (const auto *literal = dynamic_cast<const BoundLiteralExpression *>(&expression)) {
+  if (const auto *literal =
+          dynamic_cast<const BoundLiteralExpression *>(&expression)) {
     return ok_result(MakeBoundLiteral(literal->value, literal->type));
   }
-  if (const auto *column = dynamic_cast<const BoundColumnExpression *>(&expression)) {
+
+  if (const auto *column =
+          dynamic_cast<const BoundColumnExpression *>(&expression)) {
     auto clone = std::make_unique<BoundColumnExpression>();
-    clone->kind = BoundExpressionKind::Column;
     clone->type = column->type;
     clone->table_id = column->table_id;
     clone->column_id = column->column_id;
@@ -54,6 +51,7 @@ Result<BoundExpressionPtr> CloneBoundExpression(const BoundExpression &expressio
     clone->column_name = column->column_name;
     return ok_result<BoundExpressionPtr>(std::move(clone));
   }
+
   if (const auto *unary = dynamic_cast<const BoundUnaryExpression *>(&expression)) {
     if (unary->operand == nullptr) {
       return error_result<BoundExpressionPtr>(
@@ -66,13 +64,14 @@ Result<BoundExpressionPtr> CloneBoundExpression(const BoundExpression &expressio
     }
 
     auto clone = std::make_unique<BoundUnaryExpression>();
-    clone->kind = BoundExpressionKind::Unary;
     clone->type = unary->type;
     clone->op = unary->op;
     clone->operand = std::move(*operand.value);
     return ok_result<BoundExpressionPtr>(std::move(clone));
   }
-  if (const auto *binary = dynamic_cast<const BoundBinaryExpression *>(&expression)) {
+
+  if (const auto *binary =
+          dynamic_cast<const BoundBinaryExpression *>(&expression)) {
     if (binary->left == nullptr || binary->right == nullptr) {
       return error_result<BoundExpressionPtr>(
           ErrorCode::PlanError, "binary expression is missing an operand");
@@ -89,13 +88,13 @@ Result<BoundExpressionPtr> CloneBoundExpression(const BoundExpression &expressio
     }
 
     auto clone = std::make_unique<BoundBinaryExpression>();
-    clone->kind = BoundExpressionKind::Binary;
     clone->type = binary->type;
     clone->left = std::move(*left.value);
     clone->op = binary->op;
     clone->right = std::move(*right.value);
     return ok_result<BoundExpressionPtr>(std::move(clone));
   }
+
   if (dynamic_cast<const BoundStarExpression *>(&expression) != nullptr) {
     return error_result<BoundExpressionPtr>(
         ErrorCode::PlanError, "star expressions must be expanded before planning");
@@ -155,6 +154,7 @@ Status WalkBoundExpression(const BoundExpression &expression,
       dynamic_cast<const BoundStarExpression *>(&expression) != nullptr) {
     return ok_status();
   }
+
   if (const auto *unary = dynamic_cast<const BoundUnaryExpression *>(&expression)) {
     if (unary->operand == nullptr) {
       return error_status(ErrorCode::PlanError,
@@ -162,7 +162,9 @@ Status WalkBoundExpression(const BoundExpression &expression,
     }
     return WalkBoundExpression(*unary->operand, visitor);
   }
-  if (const auto *binary = dynamic_cast<const BoundBinaryExpression *>(&expression)) {
+
+  if (const auto *binary =
+          dynamic_cast<const BoundBinaryExpression *>(&expression)) {
     if (binary->left == nullptr || binary->right == nullptr) {
       return error_status(ErrorCode::PlanError,
                           "binary expression is missing an operand");
@@ -197,7 +199,10 @@ TransformBoundExpression(BoundExpressionPtr expression,
       return operand;
     }
     unary->operand = std::move(*operand.value);
-  } else if (auto *binary = dynamic_cast<BoundBinaryExpression *>(expression.get())) {
+    return transform(std::move(expression));
+  }
+
+  if (auto *binary = dynamic_cast<BoundBinaryExpression *>(expression.get())) {
     auto left = TransformBoundExpression(std::move(binary->left), transform);
     if (!status_ok(left.status)) {
       return left;
@@ -209,13 +214,16 @@ TransformBoundExpression(BoundExpressionPtr expression,
       return right;
     }
     binary->right = std::move(*right.value);
-  } else if (dynamic_cast<BoundLiteralExpression *>(expression.get()) == nullptr &&
-             dynamic_cast<BoundColumnExpression *>(expression.get()) == nullptr) {
-    return error_result<BoundExpressionPtr>(ErrorCode::PlanError,
-                                            "unsupported bound expression");
+    return transform(std::move(expression));
   }
 
-  return transform(std::move(expression));
+  if (dynamic_cast<BoundLiteralExpression *>(expression.get()) != nullptr ||
+      dynamic_cast<BoundColumnExpression *>(expression.get()) != nullptr) {
+    return transform(std::move(expression));
+  }
+
+  return error_result<BoundExpressionPtr>(ErrorCode::PlanError,
+                                          "unsupported bound expression");
 }
 
 Status ValidateNoColumnReferences(const BoundExpression &expression) {

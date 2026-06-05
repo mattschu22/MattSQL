@@ -48,6 +48,11 @@ struct PageHeapTable::Impl {
       return error_result<HeapPageFrame *>(ErrorCode::InvalidArgument,
                                            "heap page size must be positive");
     }
+    constexpr PageId kMaxValidPageId = kInvalidPageId - 1U;
+    if (pages.size() > static_cast<std::size_t>(kMaxValidPageId - root_page_id)) {
+      return error_result<HeapPageFrame *>(ErrorCode::Internal,
+                                           "heap page id space exhausted");
+    }
 
     pages.emplace_back(next_page_id(), page_size);
     auto &page = pages.back();
@@ -151,6 +156,7 @@ Result<RecordId> PageHeapTable::Insert(Transaction &transaction,
 
   auto slot = impl_->slotted_page.Insert((*page.value)->Mutable(), record);
   if (!status_ok(slot.status)) {
+    impl_->pages.pop_back();
     return error_result<RecordId>(std::move(slot.status));
   }
 

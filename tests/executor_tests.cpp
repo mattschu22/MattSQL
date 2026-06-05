@@ -2,25 +2,25 @@
 #include "mattsql/catalog/in_memory_catalog.hpp"
 #include "mattsql/common/result_utils.hpp"
 #include "mattsql/execution/default_executor.hpp"
-#include "mattsql/lexer/lexer.hpp"
-#include "mattsql/optimizer/default_optimizer.hpp"
-#include "mattsql/parser/parser.hpp"
-#include "mattsql/planner/default_logical_planner.hpp"
-#include "mattsql/planner/default_physical_planner.hpp"
 
+#include "sql_pipeline_test_utils.hpp"
 #include "test_framework.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
 namespace {
+
+using test::optimized_physical_plan_sql;
 
 class MockTransaction final : public mattsql::Transaction {
 public:
@@ -175,43 +175,108 @@ public:
   std::unordered_map<mattsql::TableId, MockTableData> tables;
 };
 
-mattsql::StatementPtr parse_statement(const std::string &sql) {
-  mattsql::Lexer lexer(sql);
-  mattsql::Parser parser(lexer.Tokenize());
-  return parser.ParseStatement();
-}
+class FailingHeapRootCatalog final : public mattsql::Catalog {
+public:
+  mattsql::Result<mattsql::TableInfo>
+  CreateTable(const mattsql::CreateTableRequest &request) override {
+    if (table_exists_) {
+      return mattsql::error_result<mattsql::TableInfo>(
+          mattsql::ErrorCode::AlreadyExists, "table already exists");
+    }
 
-mattsql::Result<mattsql::PhysicalPlanPtr> physical_plan_sql(const std::string &sql,
-                                                            mattsql::Catalog &catalog) {
-  const auto statement = parse_statement(sql);
-
-  mattsql::DefaultBinder binder;
-  auto bound = binder.Bind(*statement, catalog);
-  if (!mattsql::status_ok(bound.status)) {
-    return mattsql::error_result<mattsql::PhysicalPlanPtr>(bound.status);
+    table_exists_ = true;
+    table_ = {};
+    table_.id = mattsql::TableId{1};
+    table_.name = request.name;
+    table_.schema = request.schema;
+    return mattsql::ok_result(table_);
   }
 
-  mattsql::DefaultLogicalPlanner logical_planner;
-  auto logical = logical_planner.Plan(**bound.value);
-  if (!mattsql::status_ok(logical.status)) {
-    return mattsql::error_result<mattsql::PhysicalPlanPtr>(logical.status);
+  mattsql::Status DropTable(std::string_view table_name) override {
+    ++drop_table_calls;
+    if (!table_exists_ || table_name != table_.name) {
+      return mattsql::error_status(mattsql::ErrorCode::NotFound,
+                                   "table not found");
+    }
+
+    table_exists_ = false;
+    table_ = {};
+    return mattsql::ok_status();
   }
 
-  mattsql::DefaultOptimizer optimizer;
-  auto optimized = optimizer.Optimize(std::move(*logical.value));
-  if (!mattsql::status_ok(optimized.status)) {
-    return mattsql::error_result<mattsql::PhysicalPlanPtr>(optimized.status);
+  mattsql::Result<mattsql::TableInfo>
+  GetTable(std::string_view table_name) const override {
+    if (!table_exists_ || table_name != table_.name) {
+      return mattsql::error_result<mattsql::TableInfo>(
+          mattsql::ErrorCode::NotFound, "table not found");
+    }
+    return mattsql::ok_result(table_);
   }
 
-  mattsql::DefaultPhysicalPlanner physical_planner;
-  return physical_planner.Plan(**optimized.value);
-}
+  mattsql::Result<mattsql::TableInfo>
+  GetTable(mattsql::TableId table_id) const override {
+    if (!table_exists_ || table_id != table_.id) {
+      return mattsql::error_result<mattsql::TableInfo>(
+          mattsql::ErrorCode::NotFound, "table not found");
+    }
+    return mattsql::ok_result(table_);
+  }
+
+  mattsql::Status SetTableHeapRoot(mattsql::TableId table_id,
+                                   mattsql::PageId heap_root_page_id) override {
+    (void)table_id;
+    (void)heap_root_page_id;
+    ++set_heap_root_calls;
+    return mattsql::error_status(mattsql::ErrorCode::IoError,
+                                 "heap root update failure");
+  }
+
+  mattsql::Result<std::vector<mattsql::TableInfo>> ListTables() const override {
+    std::vector<mattsql::TableInfo> tables;
+    if (table_exists_) {
+      tables.push_back(table_);
+    }
+    return mattsql::ok_result(std::move(tables));
+  }
+
+  mattsql::Result<mattsql::IndexInfo>
+  CreateIndex(const mattsql::CreateIndexRequest &request) override {
+    (void)request;
+    return mattsql::error_result<mattsql::IndexInfo>(
+        mattsql::ErrorCode::NotSupported, "indexes are not needed by this test");
+  }
+
+  mattsql::Result<mattsql::IndexInfo>
+  GetIndex(std::string_view table_name, std::string_view index_name) const override {
+    (void)table_name;
+    (void)index_name;
+    return mattsql::error_result<mattsql::IndexInfo>(
+        mattsql::ErrorCode::NotFound, "index not found");
+  }
+
+  int set_heap_root_calls = 0;
+  int drop_table_calls = 0;
+
+private:
+  bool table_exists_ = false;
+  mattsql::TableInfo table_;
+};
+
+class LyingPhysicalValues final : public mattsql::PhysicalPlan {
+public:
+  [[nodiscard]] mattsql::PhysicalOperatorKind Kind() const override {
+    return mattsql::PhysicalOperatorKind::Values;
+  }
+
+  std::vector<std::vector<mattsql::BoundExpressionPtr>> rows;
+  mattsql::TupleBatch tuples;
+};
 
 mattsql::Result<mattsql::QueryResult> execute_sql(const std::string &sql,
                                                   mattsql::Catalog &catalog,
                                                   MockTableStorageManager &storage,
                                                   mattsql::Transaction &transaction) {
-  auto physical = physical_plan_sql(sql, catalog);
+  auto physical = optimized_physical_plan_sql(sql, catalog);
   if (!mattsql::status_ok(physical.status)) {
     return mattsql::error_result<mattsql::QueryResult>(physical.status);
   }
@@ -324,6 +389,18 @@ TEST_CASE(binary_tuple_codec_validates_and_round_trips_rows) {
                   .status.code == mattsql::ErrorCode::TypeMismatch);
   EXPECT_TRUE(codec.Decode(schema, mattsql::ConstBufferView{}).status.code ==
               mattsql::ErrorCode::Corruption);
+
+  mattsql::TableSchema null_storage_schema;
+  null_storage_schema.columns.push_back({"bad", mattsql::SqlType::Null});
+  EXPECT_TRUE(codec.Encode(null_storage_schema, {mattsql::NullValue{}})
+                  .status.code == mattsql::ErrorCode::InvalidArgument);
+
+  const std::array<std::byte, 1> null_record = {std::byte{0}};
+  EXPECT_TRUE(codec
+                  .Decode(null_storage_schema,
+                          mattsql::ConstBufferView{std::span<const std::byte>(
+                              null_record.data(), null_record.size())})
+                  .status.code == mattsql::ErrorCode::Corruption);
 }
 
 /// Verifies write statements are rejected in read-only transactions.
@@ -349,6 +426,20 @@ TEST_CASE(executor_propagates_storage_errors) {
         execute_sql("CREATE TABLE users (id INT);", catalog, storage, transaction);
     EXPECT_TRUE(result.status.code == mattsql::ErrorCode::IoError);
     EXPECT_TRUE(catalog.GetTable("users").status.code == mattsql::ErrorCode::NotFound);
+  }
+
+  {
+    FailingHeapRootCatalog catalog;
+    MockTableStorageManager storage;
+    MockTransaction transaction;
+
+    const auto result =
+        execute_sql("CREATE TABLE users (id INT);", catalog, storage, transaction);
+    EXPECT_TRUE(result.status.code == mattsql::ErrorCode::IoError);
+    EXPECT_EQ(catalog.set_heap_root_calls, 1);
+    EXPECT_EQ(catalog.drop_table_calls, 1);
+    EXPECT_TRUE(catalog.GetTable("users").status.code ==
+                mattsql::ErrorCode::NotFound);
   }
 
   {
@@ -378,16 +469,17 @@ TEST_CASE(executor_rejects_invalid_physical_plans) {
   EXPECT_TRUE(executor.Execute(unknown, transaction).status.code ==
               mattsql::ErrorCode::ExecutionError);
 
+  LyingPhysicalValues lying_values;
+  EXPECT_TRUE(executor.Execute(lying_values, transaction).status.code ==
+              mattsql::ErrorCode::ExecutionError);
+
   mattsql::PhysicalFilter missing_predicate;
-  missing_predicate.kind = mattsql::PhysicalOperatorKind::Filter;
   missing_predicate.children.push_back(std::make_unique<mattsql::PhysicalValues>());
   EXPECT_TRUE(executor.Execute(missing_predicate, transaction).status.code ==
               mattsql::ErrorCode::ExecutionError);
 
   mattsql::PhysicalProjection missing_child;
-  missing_child.kind = mattsql::PhysicalOperatorKind::Projection;
   auto literal = std::make_unique<mattsql::BoundLiteralExpression>();
-  literal->kind = mattsql::BoundExpressionKind::Literal;
   literal->type = mattsql::SqlType::Integer;
   literal->value = std::int64_t{1};
   missing_child.projections.push_back(std::move(literal));
@@ -396,7 +488,6 @@ TEST_CASE(executor_rejects_invalid_physical_plans) {
 
   transaction.SetState(mattsql::TransactionState::Committed);
   mattsql::PhysicalValues values;
-  values.kind = mattsql::PhysicalOperatorKind::Values;
   EXPECT_TRUE(executor.Execute(values, transaction).status.code ==
               mattsql::ErrorCode::TransactionConflict);
 }

@@ -3,12 +3,34 @@
 
 #include "mattsql/common/identifier.hpp"
 
+#include <array>
 #include <cctype>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace mattsql {
+namespace {
+
+struct KeywordEntry {
+  std::string_view text;
+  TokenType type;
+};
+
+inline constexpr std::array<KeywordEntry, 19> kKeywords = {{
+    {"select", TokenType::Select}, {"from", TokenType::From},
+    {"where", TokenType::Where},   {"insert", TokenType::Insert},
+    {"into", TokenType::Into},     {"values", TokenType::Values},
+    {"create", TokenType::Create}, {"table", TokenType::Table},
+    {"drop", TokenType::Drop},     {"null", TokenType::Null},
+    {"and", TokenType::And},       {"or", TokenType::Or},
+    {"not", TokenType::Not},       {"as", TokenType::As},
+    {"order", TokenType::Order},   {"by", TokenType::By},
+    {"limit", TokenType::Limit},   {"true", TokenType::True},
+    {"false", TokenType::False},
+}};
+
+} // namespace
 
 /// Creates a lexer over a caller-owned SQL input view.
 Lexer::Lexer(std::string_view input) : input_(input) {}
@@ -103,7 +125,7 @@ void Lexer::SkipTrivia() {
       Advance();
 
       // SQL line comments run until, but do not consume, the newline.
-      while (!IsAtEnd() && Peek() != '\n') {
+      while (!IsAtEnd() && Peek() != '\n' && Peek() != '\r') {
         Advance();
       }
       continue;
@@ -280,62 +302,10 @@ TokenType Lexer::LookupKeyword(std::string_view text) {
   // original casing from the input.
   const auto lowered = FoldIdentifierKey(text);
 
-  if (lowered == "select") {
-    return TokenType::Select;
-  }
-  if (lowered == "from") {
-    return TokenType::From;
-  }
-  if (lowered == "where") {
-    return TokenType::Where;
-  }
-  if (lowered == "insert") {
-    return TokenType::Insert;
-  }
-  if (lowered == "into") {
-    return TokenType::Into;
-  }
-  if (lowered == "values") {
-    return TokenType::Values;
-  }
-  if (lowered == "create") {
-    return TokenType::Create;
-  }
-  if (lowered == "table") {
-    return TokenType::Table;
-  }
-  if (lowered == "drop") {
-    return TokenType::Drop;
-  }
-  if (lowered == "null") {
-    return TokenType::Null;
-  }
-  if (lowered == "and") {
-    return TokenType::And;
-  }
-  if (lowered == "or") {
-    return TokenType::Or;
-  }
-  if (lowered == "not") {
-    return TokenType::Not;
-  }
-  if (lowered == "as") {
-    return TokenType::As;
-  }
-  if (lowered == "order") {
-    return TokenType::Order;
-  }
-  if (lowered == "by") {
-    return TokenType::By;
-  }
-  if (lowered == "limit") {
-    return TokenType::Limit;
-  }
-  if (lowered == "true") {
-    return TokenType::True;
-  }
-  if (lowered == "false") {
-    return TokenType::False;
+  for (const auto &keyword : kKeywords) {
+    if (lowered == keyword.text) {
+      return keyword.type;
+    }
   }
 
   return TokenType::Identifier;

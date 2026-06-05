@@ -50,50 +50,35 @@ private:
 
 } // namespace
 
-DefaultSqlEngine::DefaultSqlEngine()
-    : owned_catalog_(std::make_unique<InMemoryCatalog>()),
-      owned_storage_(std::make_unique<InMemoryTableStorageManager>()),
-      owned_runtime_(std::make_unique<HostedPlatformRuntime>()),
-      catalog_(owned_catalog_.get()), storage_(owned_storage_.get()),
-      runtime_(owned_runtime_.get()) {}
+struct DefaultSqlEngine::Components {
+  std::unique_ptr<Catalog> owned_catalog;
+  std::unique_ptr<TableStorageManager> owned_storage;
+  std::unique_ptr<PlatformRuntime> owned_runtime;
+  Catalog *catalog = nullptr;
+  TableStorageManager *storage = nullptr;
+  PlatformRuntime *runtime = nullptr;
+};
+
+DefaultSqlEngine::DefaultSqlEngine() : components_(std::make_unique<Components>()) {
+  components_->owned_catalog = std::make_unique<InMemoryCatalog>();
+  components_->owned_storage = std::make_unique<InMemoryTableStorageManager>();
+  components_->owned_runtime = std::make_unique<HostedPlatformRuntime>();
+  components_->catalog = components_->owned_catalog.get();
+  components_->storage = components_->owned_storage.get();
+  components_->runtime = components_->owned_runtime.get();
+}
 
 DefaultSqlEngine::DefaultSqlEngine(Catalog &catalog, TableStorageManager &storage,
                                    PlatformRuntime &runtime)
-    : catalog_(&catalog), storage_(&storage), runtime_(&runtime) {}
-
-DefaultSqlEngine::DefaultSqlEngine(DefaultSqlEngine &&other) noexcept
-    : owned_catalog_(std::move(other.owned_catalog_)),
-      owned_storage_(std::move(other.owned_storage_)),
-      owned_runtime_(std::move(other.owned_runtime_)),
-      catalog_(owned_catalog_ != nullptr ? owned_catalog_.get() : other.catalog_),
-      storage_(owned_storage_ != nullptr ? owned_storage_.get() : other.storage_),
-      runtime_(owned_runtime_ != nullptr ? owned_runtime_.get() : other.runtime_) {
-  other.catalog_ = nullptr;
-  other.storage_ = nullptr;
-  other.runtime_ = nullptr;
+    : components_(std::make_unique<Components>()) {
+  components_->catalog = &catalog;
+  components_->storage = &storage;
+  components_->runtime = &runtime;
 }
 
-DefaultSqlEngine &DefaultSqlEngine::operator=(DefaultSqlEngine &&other) noexcept {
-  if (this == &other) {
-    return *this;
-  }
+DefaultSqlEngine::DefaultSqlEngine(DefaultSqlEngine &&) noexcept = default;
 
-  const auto other_catalog = other.catalog_;
-  const auto other_storage = other.storage_;
-  const auto other_runtime = other.runtime_;
-
-  owned_catalog_ = std::move(other.owned_catalog_);
-  owned_storage_ = std::move(other.owned_storage_);
-  owned_runtime_ = std::move(other.owned_runtime_);
-  catalog_ = owned_catalog_ != nullptr ? owned_catalog_.get() : other_catalog;
-  storage_ = owned_storage_ != nullptr ? owned_storage_.get() : other_storage;
-  runtime_ = owned_runtime_ != nullptr ? owned_runtime_.get() : other_runtime;
-
-  other.catalog_ = nullptr;
-  other.storage_ = nullptr;
-  other.runtime_ = nullptr;
-  return *this;
-}
+DefaultSqlEngine &DefaultSqlEngine::operator=(DefaultSqlEngine &&) noexcept = default;
 
 DefaultSqlEngine::~DefaultSqlEngine() = default;
 
@@ -104,48 +89,49 @@ Result<QueryResult> DefaultSqlEngine::Execute(std::string_view sql) {
 
 Result<QueryResult> DefaultSqlEngine::Execute(std::string_view sql,
                                               Transaction &transaction) {
-  if (catalog_ == nullptr || storage_ == nullptr || runtime_ == nullptr) {
+  if (components_ == nullptr || components_->catalog == nullptr ||
+      components_->storage == nullptr || components_->runtime == nullptr) {
     return error_result<QueryResult>(ErrorCode::Internal,
                                      "SQL engine is not initialized");
   }
 
   auto statement = parse_sql(sql);
-  if (!status_ok(statement.status)) {
+  if (!statement.ok()) {
     return error_result<QueryResult>(std::move(statement.status));
   }
 
   DefaultBinder binder;
-  auto bound = binder.Bind(**statement.value, *catalog_);
-  if (!status_ok(bound.status)) {
+  auto bound = binder.Bind(**statement.value, *components_->catalog);
+  if (!bound.ok()) {
     return error_result<QueryResult>(std::move(bound.status));
   }
 
   DefaultLogicalPlanner logical_planner;
   auto logical = logical_planner.Plan(**bound.value);
-  if (!status_ok(logical.status)) {
+  if (!logical.ok()) {
     return error_result<QueryResult>(std::move(logical.status));
   }
 
   DefaultOptimizer optimizer;
   auto optimized = optimizer.Optimize(std::move(*logical.value));
-  if (!status_ok(optimized.status)) {
+  if (!optimized.ok()) {
     return error_result<QueryResult>(std::move(optimized.status));
   }
 
   DefaultPhysicalPlanner physical_planner;
   auto physical = physical_planner.Plan(**optimized.value);
-  if (!status_ok(physical.status)) {
+  if (!physical.ok()) {
     return error_result<QueryResult>(std::move(physical.status));
   }
 
-  DefaultExecutor executor(*catalog_, *storage_);
+  DefaultExecutor executor(*components_->catalog, *components_->storage);
   return executor.Execute(**physical.value, transaction);
 }
 
-Catalog &DefaultSqlEngine::GetCatalog() { return *catalog_; }
+Catalog &DefaultSqlEngine::GetCatalog() { return *components_->catalog; }
 
-TableStorageManager &DefaultSqlEngine::GetStorage() { return *storage_; }
+TableStorageManager &DefaultSqlEngine::GetStorage() { return *components_->storage; }
 
-PlatformRuntime &DefaultSqlEngine::GetRuntime() { return *runtime_; }
+PlatformRuntime &DefaultSqlEngine::GetRuntime() { return *components_->runtime; }
 
 } // namespace mattsql

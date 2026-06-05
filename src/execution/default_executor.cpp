@@ -2,295 +2,23 @@
 
 #include "mattsql/common/result_utils.hpp"
 #include "mattsql/common/value_utils.hpp"
+#include "mattsql/execution/expressions/evaluator.hpp"
+#include "mattsql/planner/plan_utils.hpp"
 
-#include <cstdint>
 #include <memory>
 #include <span>
 #include <string>
-#include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace mattsql {
 namespace {
-
-struct RowContext {
-  const TableSchema *schema = nullptr;
-  const std::vector<Value> *row = nullptr;
-};
 
 struct ExecutionResult {
   std::vector<std::string> columns;
   TableSchema schema;
   std::vector<std::vector<Value>> rows;
 };
-
-[[nodiscard]] Result<Value> evaluate_expression(const BoundExpression &expression,
-                                                const RowContext &context);
-
-[[nodiscard]] Result<Value> evaluate_unary(const BoundUnaryExpression &expression,
-                                           const RowContext &context) {
-  if (expression.operand == nullptr) {
-    return error_result<Value>(ErrorCode::ExecutionError,
-                               "unary expression is missing its operand");
-  }
-
-  auto operand = evaluate_expression(*expression.operand, context);
-  if (!status_ok(operand.status)) {
-    return operand;
-  }
-
-  switch (expression.op) {
-  case UnaryOperator::Plus: {
-    auto integer = RequireInteger(*operand.value, "unary plus");
-    if (!status_ok(integer.status)) {
-      return error_result<Value>(integer.status);
-    }
-    return ok_result<Value>(*integer.value);
-  }
-  case UnaryOperator::Minus: {
-    auto integer = RequireInteger(*operand.value, "unary minus");
-    if (!status_ok(integer.status)) {
-      return error_result<Value>(integer.status);
-    }
-    return ok_result<Value>(-*integer.value);
-  }
-  case UnaryOperator::Not: {
-    auto boolean = RequireBoolean(*operand.value, "NOT");
-    if (!status_ok(boolean.status)) {
-      return error_result<Value>(boolean.status);
-    }
-    return ok_result<Value>(!*boolean.value);
-  }
-  }
-
-  return error_result<Value>(ErrorCode::ExecutionError, "unknown unary operator");
-}
-
-[[nodiscard]] Result<Value> evaluate_binary(const BoundBinaryExpression &expression,
-                                            const RowContext &context) {
-  if (expression.left == nullptr || expression.right == nullptr) {
-    return error_result<Value>(ErrorCode::ExecutionError,
-                               "binary expression is missing an operand");
-  }
-
-  if (expression.op == BinaryOperator::And) {
-    auto left = evaluate_expression(*expression.left, context);
-    if (!status_ok(left.status)) {
-      return left;
-    }
-    auto left_boolean = RequireBoolean(*left.value, "AND");
-    if (!status_ok(left_boolean.status)) {
-      return error_result<Value>(left_boolean.status);
-    }
-    if (!*left_boolean.value) {
-      return ok_result<Value>(false);
-    }
-
-    auto right = evaluate_expression(*expression.right, context);
-    if (!status_ok(right.status)) {
-      return right;
-    }
-    auto right_boolean = RequireBoolean(*right.value, "AND");
-    if (!status_ok(right_boolean.status)) {
-      return error_result<Value>(right_boolean.status);
-    }
-    return ok_result<Value>(*right_boolean.value);
-  }
-
-  if (expression.op == BinaryOperator::Or) {
-    auto left = evaluate_expression(*expression.left, context);
-    if (!status_ok(left.status)) {
-      return left;
-    }
-    auto left_boolean = RequireBoolean(*left.value, "OR");
-    if (!status_ok(left_boolean.status)) {
-      return error_result<Value>(left_boolean.status);
-    }
-    if (*left_boolean.value) {
-      return ok_result<Value>(true);
-    }
-
-    auto right = evaluate_expression(*expression.right, context);
-    if (!status_ok(right.status)) {
-      return right;
-    }
-    auto right_boolean = RequireBoolean(*right.value, "OR");
-    if (!status_ok(right_boolean.status)) {
-      return error_result<Value>(right_boolean.status);
-    }
-    return ok_result<Value>(*right_boolean.value);
-  }
-
-  auto left = evaluate_expression(*expression.left, context);
-  if (!status_ok(left.status)) {
-    return left;
-  }
-
-  auto right = evaluate_expression(*expression.right, context);
-  if (!status_ok(right.status)) {
-    return right;
-  }
-
-  switch (expression.op) {
-  case BinaryOperator::Add: {
-    auto left_integer = RequireInteger(*left.value, "addition");
-    auto right_integer = RequireInteger(*right.value, "addition");
-    if (!status_ok(left_integer.status)) {
-      return error_result<Value>(left_integer.status);
-    }
-    if (!status_ok(right_integer.status)) {
-      return error_result<Value>(right_integer.status);
-    }
-    return ok_result<Value>(*left_integer.value + *right_integer.value);
-  }
-  case BinaryOperator::Subtract: {
-    auto left_integer = RequireInteger(*left.value, "subtraction");
-    auto right_integer = RequireInteger(*right.value, "subtraction");
-    if (!status_ok(left_integer.status)) {
-      return error_result<Value>(left_integer.status);
-    }
-    if (!status_ok(right_integer.status)) {
-      return error_result<Value>(right_integer.status);
-    }
-    return ok_result<Value>(*left_integer.value - *right_integer.value);
-  }
-  case BinaryOperator::Multiply: {
-    auto left_integer = RequireInteger(*left.value, "multiplication");
-    auto right_integer = RequireInteger(*right.value, "multiplication");
-    if (!status_ok(left_integer.status)) {
-      return error_result<Value>(left_integer.status);
-    }
-    if (!status_ok(right_integer.status)) {
-      return error_result<Value>(right_integer.status);
-    }
-    return ok_result<Value>(*left_integer.value * *right_integer.value);
-  }
-  case BinaryOperator::Divide: {
-    auto left_integer = RequireInteger(*left.value, "division");
-    auto right_integer = RequireInteger(*right.value, "division");
-    if (!status_ok(left_integer.status)) {
-      return error_result<Value>(left_integer.status);
-    }
-    if (!status_ok(right_integer.status)) {
-      return error_result<Value>(right_integer.status);
-    }
-    if (*right_integer.value == 0) {
-      return error_result<Value>(ErrorCode::ExecutionError, "division by zero");
-    }
-    return ok_result<Value>(*left_integer.value / *right_integer.value);
-  }
-  case BinaryOperator::Equal:
-    if (IsNull(*left.value) || IsNull(*right.value)) {
-      return ok_result<Value>(false);
-    }
-    if (auto comparison = CompareValues(*left.value, *right.value);
-        status_ok(comparison.status)) {
-      return ok_result<Value>(*comparison.value == 0);
-    } else {
-      return error_result<Value>(comparison.status);
-    }
-  case BinaryOperator::NotEqual:
-    if (IsNull(*left.value) || IsNull(*right.value)) {
-      return ok_result<Value>(false);
-    }
-    if (auto comparison = CompareValues(*left.value, *right.value);
-        status_ok(comparison.status)) {
-      return ok_result<Value>(*comparison.value != 0);
-    } else {
-      return error_result<Value>(comparison.status);
-    }
-  case BinaryOperator::Less:
-  case BinaryOperator::LessEqual:
-  case BinaryOperator::Greater:
-  case BinaryOperator::GreaterEqual: {
-    auto comparison = CompareValues(*left.value, *right.value);
-    if (!status_ok(comparison.status)) {
-      return error_result<Value>(comparison.status);
-    }
-
-    switch (expression.op) {
-    case BinaryOperator::Less:
-      return ok_result<Value>(*comparison.value < 0);
-    case BinaryOperator::LessEqual:
-      return ok_result<Value>(*comparison.value <= 0);
-    case BinaryOperator::Greater:
-      return ok_result<Value>(*comparison.value > 0);
-    case BinaryOperator::GreaterEqual:
-      return ok_result<Value>(*comparison.value >= 0);
-    default:
-      break;
-    }
-  }
-  case BinaryOperator::And:
-  case BinaryOperator::Or:
-    break;
-  }
-
-  return error_result<Value>(ErrorCode::ExecutionError, "unknown binary operator");
-}
-
-[[nodiscard]] Result<Value> evaluate_expression(const BoundExpression &expression,
-                                                const RowContext &context) {
-  if (const auto *literal = dynamic_cast<const BoundLiteralExpression *>(&expression)) {
-    return ok_result(literal->value);
-  }
-
-  if (const auto *column = dynamic_cast<const BoundColumnExpression *>(&expression)) {
-    if (context.schema == nullptr || context.row == nullptr) {
-      return error_result<Value>(ErrorCode::ExecutionError,
-                                 "column expression requires a row context");
-    }
-    if (column->column_id >= context.row->size() ||
-        column->column_id >= context.schema->columns.size()) {
-      return error_result<Value>(ErrorCode::ExecutionError,
-                                 "column id is out of range");
-    }
-    return ok_result((*context.row)[column->column_id]);
-  }
-
-  if (const auto *unary = dynamic_cast<const BoundUnaryExpression *>(&expression)) {
-    return evaluate_unary(*unary, context);
-  }
-
-  if (const auto *binary = dynamic_cast<const BoundBinaryExpression *>(&expression)) {
-    return evaluate_binary(*binary, context);
-  }
-
-  return error_result<Value>(ErrorCode::ExecutionError, "unsupported expression");
-}
-
-[[nodiscard]] std::string projection_name(const BoundExpression &expression,
-                                          std::size_t index) {
-  if (const auto *column = dynamic_cast<const BoundColumnExpression *>(&expression)) {
-    return column->column_name;
-  }
-
-  return "expr" + std::to_string(index + 1);
-}
-
-[[nodiscard]] Result<std::vector<Value>>
-evaluate_expressions(const std::vector<BoundExpressionPtr> &expressions,
-                     const RowContext &context) {
-  std::vector<Value> values;
-  values.reserve(expressions.size());
-
-  for (const auto &expression : expressions) {
-    if (expression == nullptr) {
-      return error_result<std::vector<Value>>(ErrorCode::ExecutionError,
-                                              "expression cannot be null");
-    }
-
-    auto value = evaluate_expression(*expression, context);
-    if (!status_ok(value.status)) {
-      return error_result<std::vector<Value>>(std::move(value.status));
-    }
-    values.push_back(std::move(*value.value));
-  }
-
-  return ok_result(std::move(values));
-}
 
 [[nodiscard]] QueryResult to_query_result(ExecutionResult result) {
   QueryResult query_result;
@@ -329,11 +57,11 @@ public:
 
   Result<QueryResult> Execute(const PhysicalPlan &plan) {
     auto result = execute_plan(plan);
-    if (!status_ok(result.status)) {
+    if (!result.ok()) {
       return error_result<QueryResult>(std::move(result.status));
     }
 
-    return ok_result(to_query_result(std::move(*result.value)));
+    return ok_result(to_query_result(std::move(result).TakeValue()));
   }
 
 private:
@@ -362,9 +90,10 @@ private:
   }
 
   Result<ExecutionResult> execute_create_table(const PhysicalCreateTable &plan) {
-    if (!plan.children.empty()) {
-      return error_result<ExecutionResult>(ErrorCode::ExecutionError,
-                                           "CREATE TABLE cannot have children");
+    const auto child_status =
+        RequireLeaf(plan, "CREATE TABLE", ErrorCode::ExecutionError);
+    if (!status_ok(child_status)) {
+      return error_result<ExecutionResult>(child_status);
     }
     const auto writable_status = require_writable(transaction_);
     if (!status_ok(writable_status)) {
@@ -376,19 +105,20 @@ private:
     }
 
     auto table = catalog_.CreateTable(plan.request);
-    if (!status_ok(table.status)) {
+    if (!table.ok()) {
       return error_result<ExecutionResult>(std::move(table.status));
     }
 
-    auto heap_root = storage_.CreateHeap(transaction_, *table.value);
-    if (!status_ok(heap_root.status)) {
-      (void)catalog_.DropTable(table.value->name);
+    auto heap_root = storage_.CreateHeap(transaction_, table.Value());
+    if (!heap_root.ok()) {
+      (void)catalog_.DropTable(table.Value().name);
       return error_result<ExecutionResult>(std::move(heap_root.status));
     }
 
     const auto root_status =
-        catalog_.SetTableHeapRoot(table.value->id, *heap_root.value);
+        catalog_.SetTableHeapRoot(table.Value().id, heap_root.Value());
     if (!status_ok(root_status)) {
+      (void)catalog_.DropTable(table.Value().name);
       return error_result<ExecutionResult>(root_status);
     }
 
@@ -396,9 +126,10 @@ private:
   }
 
   Result<ExecutionResult> execute_insert(const PhysicalInsert &plan) {
-    if (plan.children.size() != 1 || plan.children[0] == nullptr) {
-      return error_result<ExecutionResult>(ErrorCode::ExecutionError,
-                                           "INSERT requires one input");
+    const auto child_status =
+        RequireChildCount(plan, 1, "INSERT", ErrorCode::ExecutionError);
+    if (!status_ok(child_status)) {
+      return error_result<ExecutionResult>(child_status);
     }
     const auto writable_status = require_writable(transaction_);
     if (!status_ok(writable_status)) {
@@ -410,30 +141,30 @@ private:
     }
 
     auto input = execute_plan(*plan.children[0]);
-    if (!status_ok(input.status)) {
+    if (!input.ok()) {
       return input;
     }
 
     auto heap = storage_.OpenHeap(plan.storage);
-    if (!status_ok(heap.status)) {
+    if (!heap.ok()) {
       return error_result<ExecutionResult>(std::move(heap.status));
     }
 
-    for (const auto &row : input.value->rows) {
+    for (const auto &row : input.Value().rows) {
       if (row.size() != plan.table.schema.columns.size()) {
         return error_result<ExecutionResult>(
             ErrorCode::ExecutionError, "INSERT row width does not match table schema");
       }
 
       auto tuple = tuple_codec_.Encode(plan.table.schema, row);
-      if (!status_ok(tuple.status)) {
+      if (!tuple.ok()) {
         return error_result<ExecutionResult>(std::move(tuple.status));
       }
 
-      ConstBufferView record{std::span<const std::byte>(tuple.value->bytes.data(),
-                                                        tuple.value->bytes.size())};
-      auto inserted = (*heap.value)->Insert(transaction_, record);
-      if (!status_ok(inserted.status)) {
+      ConstBufferView record{std::span<const std::byte>(tuple.Value().bytes.data(),
+                                                        tuple.Value().bytes.size())};
+      auto inserted = heap.Value()->Insert(transaction_, record);
+      if (!inserted.ok()) {
         return error_result<ExecutionResult>(std::move(inserted.status));
       }
     }
@@ -442,9 +173,10 @@ private:
   }
 
   Result<ExecutionResult> execute_projection(const PhysicalProjection &plan) {
-    if (plan.children.size() != 1 || plan.children[0] == nullptr) {
-      return error_result<ExecutionResult>(ErrorCode::ExecutionError,
-                                           "projection requires one input");
+    const auto child_status =
+        RequireChildCount(plan, 1, "projection", ErrorCode::ExecutionError);
+    if (!status_ok(child_status)) {
+      return error_result<ExecutionResult>(child_status);
     }
     if (plan.projections.empty()) {
       return error_result<ExecutionResult>(ErrorCode::ExecutionError,
@@ -458,7 +190,7 @@ private:
     }
 
     auto input = execute_plan(*plan.children[0]);
-    if (!status_ok(input.status)) {
+    if (!input.ok()) {
       return input;
     }
 
@@ -476,7 +208,7 @@ private:
       if (!plan.projection_names.empty() && !plan.projection_names[index].empty()) {
         column.name = plan.projection_names[index];
       } else {
-        column.name = projection_name(*projection, index);
+        column.name = ProjectionName(*projection, index);
       }
       column.type = projection->type;
       column.id = static_cast<ColumnId>(index);
@@ -484,23 +216,25 @@ private:
       output.schema.columns.push_back(std::move(column));
     }
 
-    output.rows.reserve(input.value->rows.size());
-    for (const auto &row : input.value->rows) {
-      const RowContext context{&input.value->schema, &row};
-      auto projected = evaluate_expressions(plan.projections, context);
-      if (!status_ok(projected.status)) {
+    output.rows.reserve(input.Value().rows.size());
+    for (const auto &row : input.Value().rows) {
+      const EvaluationContext context{&input.Value().schema, &row};
+      auto projected =
+          EvaluateExpressions(expression_evaluator_, plan.projections, context);
+      if (!projected.ok()) {
         return error_result<ExecutionResult>(std::move(projected.status));
       }
-      output.rows.push_back(std::move(*projected.value));
+      output.rows.push_back(std::move(projected).TakeValue());
     }
 
     return ok_result(std::move(output));
   }
 
   Result<ExecutionResult> execute_filter(const PhysicalFilter &plan) {
-    if (plan.children.size() != 1 || plan.children[0] == nullptr) {
-      return error_result<ExecutionResult>(ErrorCode::ExecutionError,
-                                           "filter requires one input");
+    const auto child_status =
+        RequireChildCount(plan, 1, "filter", ErrorCode::ExecutionError);
+    if (!status_ok(child_status)) {
+      return error_result<ExecutionResult>(child_status);
     }
     if (plan.predicate == nullptr) {
       return error_result<ExecutionResult>(ErrorCode::ExecutionError,
@@ -508,25 +242,25 @@ private:
     }
 
     auto input = execute_plan(*plan.children[0]);
-    if (!status_ok(input.status)) {
+    if (!input.ok()) {
       return input;
     }
 
     ExecutionResult output;
-    output.columns = input.value->columns;
-    output.schema = input.value->schema;
-    for (const auto &row : input.value->rows) {
-      const RowContext context{&input.value->schema, &row};
-      auto predicate = evaluate_expression(*plan.predicate, context);
-      if (!status_ok(predicate.status)) {
+    output.columns = input.Value().columns;
+    output.schema = input.Value().schema;
+    for (const auto &row : input.Value().rows) {
+      const EvaluationContext context{&input.Value().schema, &row};
+      auto predicate = expression_evaluator_.Evaluate(*plan.predicate, context);
+      if (!predicate.ok()) {
         return error_result<ExecutionResult>(std::move(predicate.status));
       }
 
-      auto include = RequireBoolean(*predicate.value, "filter");
-      if (!status_ok(include.status)) {
+      auto include = RequireBoolean(predicate.Value(), "filter");
+      if (!include.ok()) {
         return error_result<ExecutionResult>(std::move(include.status));
       }
-      if (*include.value) {
+      if (include.Value()) {
         output.rows.push_back(row);
       }
     }
@@ -535,28 +269,28 @@ private:
   }
 
   Result<ExecutionResult> execute_values(const PhysicalValues &plan) {
-    if (!plan.children.empty()) {
-      return error_result<ExecutionResult>(ErrorCode::ExecutionError,
-                                           "VALUES cannot have children");
+    const auto child_status = RequireLeaf(plan, "VALUES", ErrorCode::ExecutionError);
+    if (!status_ok(child_status)) {
+      return error_result<ExecutionResult>(child_status);
     }
 
     ExecutionResult output;
     for (const auto &row : plan.rows) {
-      const RowContext context;
-      auto values = evaluate_expressions(row, context);
-      if (!status_ok(values.status)) {
+      const EvaluationContext context;
+      auto values = EvaluateExpressions(expression_evaluator_, row, context);
+      if (!values.ok()) {
         return error_result<ExecutionResult>(std::move(values.status));
       }
-      output.rows.push_back(std::move(*values.value));
+      output.rows.push_back(std::move(values).TakeValue());
     }
 
     return ok_result(std::move(output));
   }
 
   Result<ExecutionResult> execute_seq_scan(const PhysicalSeqScan &plan) {
-    if (!plan.children.empty()) {
-      return error_result<ExecutionResult>(ErrorCode::ExecutionError,
-                                           "SeqScan cannot have children");
+    const auto child_status = RequireLeaf(plan, "SeqScan", ErrorCode::ExecutionError);
+    if (!status_ok(child_status)) {
+      return error_result<ExecutionResult>(child_status);
     }
     if (plan.storage.method != TableStorageMethod::Heap) {
       return error_result<ExecutionResult>(ErrorCode::NotSupported,
@@ -564,12 +298,12 @@ private:
     }
 
     auto heap = storage_.OpenHeap(plan.storage);
-    if (!status_ok(heap.status)) {
+    if (!heap.ok()) {
       return error_result<ExecutionResult>(std::move(heap.status));
     }
 
-    auto cursor = (*heap.value)->Scan(transaction_);
-    if (!status_ok(cursor.status)) {
+    auto cursor = heap.Value()->Scan(transaction_);
+    if (!cursor.ok()) {
       return error_result<ExecutionResult>(std::move(cursor.status));
     }
 
@@ -581,19 +315,19 @@ private:
     }
 
     while (true) {
-      auto record = (*cursor.value)->Next();
+      auto record = cursor.Value()->Next();
       if (record.status.code == ErrorCode::NotFound) {
         break;
       }
-      if (!status_ok(record.status)) {
+      if (!record.ok()) {
         return error_result<ExecutionResult>(std::move(record.status));
       }
 
-      auto row = tuple_codec_.Decode(plan.table.schema, record.value->bytes);
-      if (!status_ok(row.status)) {
+      auto row = tuple_codec_.Decode(plan.table.schema, record.Value().bytes);
+      if (!row.ok()) {
         return error_result<ExecutionResult>(std::move(row.status));
       }
-      output.rows.push_back(std::move(*row.value));
+      output.rows.push_back(std::move(row).TakeValue());
     }
 
     return ok_result(std::move(output));
@@ -603,6 +337,7 @@ private:
   TableStorageManager &storage_;
   const TupleCodec &tuple_codec_;
   Transaction &transaction_;
+  DefaultExpressionEvaluator expression_evaluator_;
 };
 
 } // namespace

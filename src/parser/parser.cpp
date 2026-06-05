@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -12,6 +13,8 @@
 
 namespace mattsql {
 namespace {
+
+inline constexpr int kNotPrecedence = 3;
 
 /// Decodes a quoted SQL string token into its AST literal value.
 [[nodiscard]] std::string unescape_sql_string(std::string_view lexeme) {
@@ -205,6 +208,11 @@ std::vector<SelectProjection> Parser::ParseSelectProjectionList() {
 
 /// Parses an expression with precedence climbing from the minimum precedence.
 ExpressionPtr Parser::ParseExpression(int min_precedence) {
+  if (min_precedence <= kNotPrecedence && Match(TokenType::Not)) {
+    return std::make_unique<UnaryExpression>(
+        UnaryOperator::Not, ParseExpression(kNotPrecedence));
+  }
+
   auto left = ParsePrefixExpression();
 
   while (true) {
@@ -225,11 +233,18 @@ ExpressionPtr Parser::ParseExpression(int min_precedence) {
 
 /// Parses prefix unary operators before delegating to primary expressions.
 ExpressionPtr Parser::ParsePrefixExpression() {
-  if (Match(TokenType::Plus) || Match(TokenType::Minus) || Match(TokenType::Not)) {
+  if (Match(TokenType::Plus) || Match(TokenType::Minus)) {
     const auto operator_type = Previous().type;
 
-    // Parse the operand with prefix parsing again so chained prefixes like
-    // NOT -flag bind before any following binary operator.
+    if (operator_type == TokenType::Minus && Check(TokenType::Integer) &&
+        Peek().lexeme == "9223372036854775808") {
+      Advance();
+      return std::make_unique<IntegerLiteral>(
+          std::numeric_limits<std::int64_t>::min());
+    }
+
+    // Parse the operand with prefix parsing again so chained signs bind before
+    // any following binary operator.
     return std::make_unique<UnaryExpression>(TokenToUnaryOperator(operator_type),
                                              ParsePrefixExpression());
   }
@@ -310,13 +325,13 @@ int Parser::GetBinaryPrecedence(TokenType type) {
   case TokenType::LessEqual:
   case TokenType::Greater:
   case TokenType::GreaterEqual:
-    return 3;
+    return 4;
   case TokenType::Plus:
   case TokenType::Minus:
-    return 4;
+    return 5;
   case TokenType::Star:
   case TokenType::Slash:
-    return 5;
+    return 6;
   default:
     return -1;
   }

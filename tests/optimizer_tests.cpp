@@ -1,11 +1,9 @@
 #include "mattsql/binder/default_binder.hpp"
 #include "mattsql/catalog/in_memory_catalog.hpp"
 #include "mattsql/common/result_utils.hpp"
-#include "mattsql/lexer/lexer.hpp"
 #include "mattsql/optimizer/default_optimizer.hpp"
-#include "mattsql/parser/parser.hpp"
-#include "mattsql/planner/default_logical_planner.hpp"
 
+#include "sql_pipeline_test_utils.hpp"
 #include "test_framework.hpp"
 
 #include <cstdint>
@@ -18,58 +16,10 @@
 
 namespace {
 
-mattsql::StatementPtr parse_statement(const std::string &sql) {
-  mattsql::Lexer lexer(sql);
-  mattsql::Parser parser(lexer.Tokenize());
-  return parser.ParseStatement();
-}
-
-template <typename T, typename Base> const T *as(const Base *node) {
-  const auto *value = dynamic_cast<const T *>(node);
-  EXPECT_TRUE(value != nullptr);
-  return value;
-}
-
-mattsql::CreateTableRequest users_request() {
-  mattsql::CreateTableRequest request;
-  request.name = "users";
-  request.schema.columns.push_back({"id", mattsql::SqlType::Integer, false});
-  request.schema.columns.push_back({"name", mattsql::SqlType::Text});
-  request.schema.columns.push_back({"active", mattsql::SqlType::Boolean, false});
-  return request;
-}
-
-mattsql::InMemoryCatalog make_catalog() {
-  mattsql::InMemoryCatalog catalog;
-  const auto created = catalog.CreateTable(users_request());
-  EXPECT_TRUE(mattsql::status_ok(created.status));
-  return catalog;
-}
-
-mattsql::Result<mattsql::LogicalPlanPtr> plan_sql(const std::string &sql,
-                                                  mattsql::Catalog &catalog) {
-  const auto statement = parse_statement(sql);
-
-  mattsql::DefaultBinder binder;
-  auto bound = binder.Bind(*statement, catalog);
-  if (!mattsql::status_ok(bound.status)) {
-    return mattsql::error_result<mattsql::LogicalPlanPtr>(bound.status);
-  }
-
-  mattsql::DefaultLogicalPlanner planner;
-  return planner.Plan(**bound.value);
-}
-
-mattsql::Result<mattsql::LogicalPlanPtr> optimize_sql(const std::string &sql,
-                                                      mattsql::Catalog &catalog) {
-  auto plan = plan_sql(sql, catalog);
-  if (!mattsql::status_ok(plan.status)) {
-    return plan;
-  }
-
-  mattsql::DefaultOptimizer optimizer;
-  return optimizer.Optimize(std::move(*plan.value));
-}
+using test::as;
+using test::logical_plan_sql;
+using test::make_catalog;
+using test::optimized_logical_plan_sql;
 
 class RecordingRule final : public mattsql::OptimizerRule {
 public:
@@ -124,13 +74,23 @@ public:
   }
 };
 
+class LyingLogicalProjection final : public mattsql::LogicalPlan {
+public:
+  [[nodiscard]] mattsql::LogicalOperatorKind Kind() const override {
+    return mattsql::LogicalOperatorKind::Projection;
+  }
+
+  std::vector<mattsql::BoundExpressionPtr> projections;
+  std::vector<std::string> projection_names;
+};
+
 } // namespace
 
 /// Verifies literal-only projection expressions are folded recursively.
 TEST_CASE(optimizer_folds_constant_projection_expressions) {
   mattsql::InMemoryCatalog catalog;
 
-  const auto optimized = optimize_sql("SELECT 1 + 2 * 3;", catalog);
+  const auto optimized = optimized_logical_plan_sql("SELECT 1 + 2 * 3;", catalog);
 
   EXPECT_TRUE(mattsql::status_ok(optimized.status));
   const auto *projection = as<mattsql::LogicalProjection>(optimized.value->get());
@@ -146,7 +106,8 @@ TEST_CASE(optimizer_folds_constant_projection_expressions) {
 TEST_CASE(optimizer_removes_true_constant_filter) {
   auto catalog = make_catalog();
 
-  const auto optimized = optimize_sql("SELECT id FROM users WHERE 1 = 1;", catalog);
+  const auto optimized =
+      optimized_logical_plan_sql("SELECT id FROM users WHERE 1 = 1;", catalog);
 
   EXPECT_TRUE(mattsql::status_ok(optimized.status));
   const auto *projection = as<mattsql::LogicalProjection>(optimized.value->get());
@@ -159,7 +120,8 @@ TEST_CASE(optimizer_removes_true_constant_filter) {
 TEST_CASE(optimizer_replaces_false_constant_filter_with_empty_values) {
   auto catalog = make_catalog();
 
-  const auto optimized = optimize_sql("SELECT id FROM users WHERE 1 = 0;", catalog);
+  const auto optimized =
+      optimized_logical_plan_sql("SELECT id FROM users WHERE 1 = 0;", catalog);
 
   EXPECT_TRUE(mattsql::status_ok(optimized.status));
   const auto *projection = as<mattsql::LogicalProjection>(optimized.value->get());
@@ -172,8 +134,8 @@ TEST_CASE(optimizer_replaces_false_constant_filter_with_empty_values) {
 TEST_CASE(optimizer_folds_insert_values_payloads) {
   auto catalog = make_catalog();
 
-  const auto optimized =
-      optimize_sql("INSERT INTO users VALUES (1 + 2, 'Ada', 1);", catalog);
+  const auto optimized = optimized_logical_plan_sql(
+      "INSERT INTO users VALUES (1 + 2, 'Ada', 1);", catalog);
 
   EXPECT_TRUE(mattsql::status_ok(optimized.status));
   const auto *insert = as<mattsql::LogicalInsert>(optimized.value->get());
@@ -189,7 +151,7 @@ TEST_CASE(optimizer_folds_insert_values_payloads) {
 TEST_CASE(optimizer_leaves_division_by_zero_for_execution) {
   mattsql::InMemoryCatalog catalog;
 
-  const auto optimized = optimize_sql("SELECT 1 / 0;", catalog);
+  const auto optimized = optimized_logical_plan_sql("SELECT 1 / 0;", catalog);
 
   EXPECT_TRUE(mattsql::status_ok(optimized.status));
   const auto *projection = as<mattsql::LogicalProjection>(optimized.value->get());
@@ -201,7 +163,7 @@ TEST_CASE(optimizer_leaves_division_by_zero_for_execution) {
 /// Verifies custom rules run after built-ins and preserve insertion order.
 TEST_CASE(optimizer_runs_custom_rules_in_order) {
   mattsql::InMemoryCatalog catalog;
-  auto plan = plan_sql("CREATE TABLE projects (id INT);", catalog);
+  auto plan = logical_plan_sql("CREATE TABLE projects (id INT);", catalog);
   EXPECT_TRUE(mattsql::status_ok(plan.status));
 
   std::vector<std::string> order;
@@ -237,7 +199,7 @@ TEST_CASE(optimizer_rejects_invalid_inputs) {
 TEST_CASE(optimizer_propagates_rule_failures) {
   {
     mattsql::InMemoryCatalog catalog;
-    auto plan = plan_sql("CREATE TABLE projects (id INT);", catalog);
+    auto plan = logical_plan_sql("CREATE TABLE projects (id INT);", catalog);
     EXPECT_TRUE(mattsql::status_ok(plan.status));
 
     mattsql::DefaultOptimizer optimizer;
@@ -249,7 +211,7 @@ TEST_CASE(optimizer_propagates_rule_failures) {
 
   {
     mattsql::InMemoryCatalog catalog;
-    auto plan = plan_sql("CREATE TABLE projects (id INT);", catalog);
+    auto plan = logical_plan_sql("CREATE TABLE projects (id INT);", catalog);
     EXPECT_TRUE(mattsql::status_ok(plan.status));
 
     mattsql::DefaultOptimizer optimizer;
@@ -265,7 +227,6 @@ TEST_CASE(optimizer_propagates_rule_failures) {
 TEST_CASE(optimizer_rejects_malformed_logical_plans) {
   {
     auto projection = std::make_unique<mattsql::LogicalProjection>();
-    projection->kind = mattsql::LogicalOperatorKind::Projection;
     projection->projections.push_back(nullptr);
 
     mattsql::DefaultOptimizer optimizer;
@@ -275,7 +236,6 @@ TEST_CASE(optimizer_rejects_malformed_logical_plans) {
 
   {
     auto filter = std::make_unique<mattsql::LogicalFilter>();
-    filter->kind = mattsql::LogicalOperatorKind::Filter;
     filter->children.push_back(std::make_unique<mattsql::LogicalValues>());
 
     mattsql::DefaultOptimizer optimizer;
@@ -285,13 +245,22 @@ TEST_CASE(optimizer_rejects_malformed_logical_plans) {
 
   {
     auto projection = std::make_unique<mattsql::LogicalProjection>();
-    projection->kind = mattsql::LogicalOperatorKind::Projection;
     auto star = std::make_unique<mattsql::BoundStarExpression>();
-    star->kind = mattsql::BoundExpressionKind::Star;
     projection->projections.push_back(std::move(star));
 
     mattsql::DefaultOptimizer optimizer;
     const auto optimized = optimizer.Optimize(std::move(projection));
     EXPECT_TRUE(optimized.status.code == mattsql::ErrorCode::PlanError);
   }
+}
+
+/// Verifies optimizer dispatch checks runtime type, not just reported Kind.
+TEST_CASE(optimizer_rejects_misreported_logical_plan_kind) {
+  auto projection = std::make_unique<LyingLogicalProjection>();
+  projection->projections.push_back(test::make_integer_literal(1));
+
+  mattsql::DefaultOptimizer optimizer;
+  const auto optimized = optimizer.Optimize(std::move(projection));
+
+  EXPECT_TRUE(optimized.status.code == mattsql::ErrorCode::PlanError);
 }

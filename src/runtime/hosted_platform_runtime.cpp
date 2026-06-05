@@ -54,6 +54,8 @@ inline constexpr std::size_t kHostedMaxIoBatchSize = 64;
 inline constexpr std::size_t kHostedMaxOutstandingIo = 1024;
 inline constexpr RuntimeMemoryFlags kHostedKnownMemoryFlags =
     kRuntimeMemoryZeroed | kRuntimeMemoryDma;
+inline constexpr IoRequestFlags kHostedKnownIoRequestFlags =
+    kIoRequestBarrierBefore | kIoRequestBarrierAfter | kIoRequestForceUnitAccess;
 
 [[nodiscard]] bool is_power_of_two(std::size_t value) {
   return value != 0 && (value & (value - 1U)) == 0;
@@ -195,11 +197,28 @@ HostedPlatformRuntime::SubmitIoBatch(std::span<const IoRequest> requests) {
         ErrorCode::IoError, "hosted I/O completion queue is full");
   }
 
+  for (const auto &request : requests) {
+    if ((request.flags & ~kHostedKnownIoRequestFlags) != 0) {
+      return error_result<IoSubmissionResult>(ErrorCode::InvalidArgument,
+                                              "unknown I/O request flags");
+    }
+    switch (request.operation) {
+    case IoOperation::Read:
+    case IoOperation::Write:
+    case IoOperation::Flush:
+      break;
+    default:
+      return error_result<IoSubmissionResult>(ErrorCode::InvalidArgument,
+                                              "unknown I/O operation");
+    }
+  }
+
   IoSubmissionResult submission;
   submission.submitted_count = requests.size();
 
   for (std::size_t index = 0; index < requests.size(); ++index) {
     const auto &request = requests[index];
+
     auto request_id = request.id;
     if (request_id == 0) {
       request_id = impl_->next_io_request_id++;
@@ -256,6 +275,9 @@ HostedPlatformRuntime::SubmitIoBatch(std::span<const IoRequest> requests) {
       completion.bytes_transferred = 0;
       break;
     }
+    default:
+      return error_result<IoSubmissionResult>(ErrorCode::InvalidArgument,
+                                              "unknown I/O operation");
     }
 
     impl_->completions.push_back(std::move(completion));

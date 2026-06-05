@@ -5,9 +5,132 @@
 #include "mattsql_test_utils.hpp"
 #include "test_framework.hpp"
 
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <span>
+#include <string_view>
 #include <vector>
+
+namespace {
+
+class MissingValueRuntime final : public mattsql::PlatformRuntime {
+public:
+  mattsql::RuntimeCapabilities GetCapabilities() const override { return {}; }
+
+  mattsql::Result<mattsql::RuntimePageAllocation>
+  AllocatePages(std::size_t page_count, std::size_t alignment,
+                mattsql::RuntimeMemoryFlags flags) override {
+    (void)page_count;
+    (void)alignment;
+    (void)flags;
+    return {};
+  }
+
+  mattsql::Status FreePages(const mattsql::RuntimePageAllocation &allocation) override {
+    (void)allocation;
+    return mattsql::ok_status();
+  }
+
+  mattsql::Result<mattsql::IoSubmissionResult>
+  SubmitIoBatch(std::span<const mattsql::IoRequest> requests) override {
+    (void)requests;
+    return {};
+  }
+
+  mattsql::Result<std::size_t>
+  PollIoCompletions(std::span<mattsql::IoCompletion> completions) override {
+    (void)completions;
+    return {};
+  }
+
+  mattsql::Result<mattsql::RuntimeTaskId>
+  SpawnTask(const mattsql::TaskDescriptor &descriptor) override {
+    (void)descriptor;
+    return mattsql::ok_result(mattsql::RuntimeTaskId{1});
+  }
+
+  mattsql::Status Yield() override { return mattsql::ok_status(); }
+
+  std::uint64_t MonotonicNanos() const override { return 0; }
+
+  void Log(mattsql::LogLevel level, std::string_view message) override {
+    (void)level;
+    (void)message;
+  }
+
+  [[noreturn]] void Panic(std::string_view message) override {
+    (void)message;
+    std::abort();
+  }
+};
+
+class MalformedBatchRuntime final : public mattsql::PlatformRuntime {
+public:
+  mattsql::RuntimeCapabilities GetCapabilities() const override { return {}; }
+
+  mattsql::Result<mattsql::RuntimePageAllocation>
+  AllocatePages(std::size_t page_count, std::size_t alignment,
+                mattsql::RuntimeMemoryFlags flags) override {
+    (void)flags;
+    mattsql::RuntimePageAllocation allocation;
+    allocation.data = reinterpret_cast<void *>(std::uintptr_t{0x1000});
+    allocation.page_count = page_count;
+    allocation.page_size = mattsql::kDefaultPageSize;
+    allocation.alignment = alignment;
+    return mattsql::ok_result(allocation);
+  }
+
+  mattsql::Status FreePages(const mattsql::RuntimePageAllocation &allocation) override {
+    (void)allocation;
+    return mattsql::ok_status();
+  }
+
+  mattsql::Result<mattsql::IoSubmissionResult>
+  SubmitIoBatch(std::span<const mattsql::IoRequest> requests) override {
+    (void)requests;
+    mattsql::IoSubmissionResult submission;
+    submission.submitted_count = submitted_count;
+    submission.first_request_id = first_request_id;
+    return mattsql::ok_result(submission);
+  }
+
+  mattsql::Result<std::size_t>
+  PollIoCompletions(std::span<mattsql::IoCompletion> completions) override {
+    if (!completions.empty()) {
+      completions[0].id = mattsql::IoRequestId{7};
+      completions[0].status = mattsql::ok_status();
+    }
+    return mattsql::ok_result(completion_count);
+  }
+
+  mattsql::Result<mattsql::RuntimeTaskId>
+  SpawnTask(const mattsql::TaskDescriptor &descriptor) override {
+    (void)descriptor;
+    return mattsql::ok_result(mattsql::RuntimeTaskId{1});
+  }
+
+  mattsql::Status Yield() override { return mattsql::ok_status(); }
+
+  std::uint64_t MonotonicNanos() const override { return 0; }
+
+  void Log(mattsql::LogLevel level, std::string_view message) override {
+    (void)level;
+    (void)message;
+  }
+
+  [[noreturn]] void Panic(std::string_view message) override {
+    (void)message;
+    std::abort();
+  }
+
+  std::size_t submitted_count = 1;
+  mattsql::IoRequestId first_request_id = 1;
+  std::size_t completion_count = 1;
+};
+
+} // namespace
 
 /// Verifies the hosted runtime reports the minimal scalable runtime boundary.
 TEST_CASE(hosted_runtime_reports_minimum_capabilities) {
@@ -66,6 +189,27 @@ TEST_CASE(hosted_runtime_allocates_aligned_zeroed_page_spans) {
   }
 
   EXPECT_TRUE(mattsql::status_ok(runtime.FreePages(allocation)));
+}
+
+/// Verifies runtime page allocations can be owned with RAII move semantics.
+TEST_CASE(hosted_runtime_page_span_owner_releases_allocations) {
+  mattsql::HostedPlatformRuntime runtime;
+
+  auto page_span = runtime.AllocatePageSpan(1);
+  EXPECT_TRUE(mattsql::status_ok(page_span.status));
+  EXPECT_TRUE(page_span.value.has_value());
+  EXPECT_TRUE(*page_span.value);
+  EXPECT_TRUE(page_span.value->data() != nullptr);
+  EXPECT_EQ(page_span.value->bytes().size(), mattsql::kDefaultPageSize);
+
+  mattsql::RuntimePageAllocationHandle moved = std::move(*page_span.value);
+  EXPECT_TRUE(moved);
+  EXPECT_TRUE(!*page_span.value);
+
+  const auto raw = moved.Release();
+  EXPECT_TRUE(!moved);
+  EXPECT_TRUE(raw.data != nullptr);
+  EXPECT_TRUE(mattsql::status_ok(runtime.FreePages(raw)));
 }
 
 /// Verifies invalid page-span requests fail before allocation.
@@ -171,4 +315,82 @@ TEST_CASE(hosted_runtime_single_io_helpers_use_batch_boundary) {
 
   auto empty_completion = runtime.PollIoCompletion();
   EXPECT_TRUE(empty_completion.status.code == mattsql::ErrorCode::NotFound);
+}
+
+/// Verifies PlatformRuntime helpers reject malformed successful batch results.
+TEST_CASE(platform_runtime_helpers_reject_success_without_values) {
+  MissingValueRuntime runtime;
+
+  auto page_span = runtime.AllocatePageSpan(1);
+  EXPECT_TRUE(page_span.status.code == mattsql::ErrorCode::Internal);
+
+  mattsql::IoRequest request;
+  request.operation = mattsql::IoOperation::Flush;
+  auto request_id = runtime.SubmitIo(request);
+  EXPECT_TRUE(request_id.status.code == mattsql::ErrorCode::Internal);
+
+  auto completion = runtime.PollIoCompletion();
+  EXPECT_TRUE(completion.status.code == mattsql::ErrorCode::Internal);
+}
+
+/// Verifies single-request helpers validate successful batch metadata.
+TEST_CASE(platform_runtime_helpers_reject_malformed_success_metadata) {
+  MalformedBatchRuntime runtime;
+
+  mattsql::IoRequest request;
+  request.id = mattsql::IoRequestId{9};
+  request.operation = mattsql::IoOperation::Flush;
+
+  runtime.submitted_count = 0;
+  auto request_id = runtime.SubmitIo(request);
+  EXPECT_TRUE(request_id.status.code == mattsql::ErrorCode::Internal);
+
+  runtime.submitted_count = 2;
+  request_id = runtime.SubmitIo(request);
+  EXPECT_TRUE(request_id.status.code == mattsql::ErrorCode::Internal);
+
+  runtime.submitted_count = 1;
+  runtime.first_request_id = mattsql::IoRequestId{8};
+  request_id = runtime.SubmitIo(request);
+  EXPECT_TRUE(request_id.status.code == mattsql::ErrorCode::Internal);
+
+  runtime.completion_count = 2;
+  auto completion = runtime.PollIoCompletion();
+  EXPECT_TRUE(completion.status.code == mattsql::ErrorCode::Internal);
+
+  mattsql::RuntimePageAllocation allocation;
+  allocation.data = reinterpret_cast<void *>(std::uintptr_t{0x1000});
+  allocation.page_count = std::numeric_limits<std::size_t>::max();
+  allocation.page_size = 2;
+  mattsql::RuntimePageAllocationHandle handle(runtime, allocation);
+  EXPECT_EQ(handle.bytes().size(), 0U);
+  (void)handle.Release();
+}
+
+/// Verifies hosted I/O rejects unknown flags and operation enum values.
+TEST_CASE(hosted_runtime_rejects_unknown_io_flags_and_operations) {
+  mattsql::MemoryBlockDevice device(128, 32);
+  mattsql::HostedPlatformRuntime runtime(device);
+  std::vector<std::byte> buffer(32);
+
+  mattsql::IoRequest request;
+  request.operation = mattsql::IoOperation::Write;
+  request.buffer = test::mutable_view(buffer);
+  request.flags = 1U << 12U;
+
+  auto submission =
+      runtime.SubmitIoBatch(std::span<const mattsql::IoRequest>(&request, 1));
+  EXPECT_TRUE(submission.status.code == mattsql::ErrorCode::InvalidArgument);
+
+  request.flags = mattsql::kIoRequestNoFlags;
+  request.operation = static_cast<mattsql::IoOperation>(999);
+  submission = runtime.SubmitIoBatch(
+      std::span<const mattsql::IoRequest>(&request, 1));
+  EXPECT_TRUE(submission.status.code == mattsql::ErrorCode::InvalidArgument);
+
+  mattsql::IoCompletion completion;
+  auto completion_count =
+      runtime.PollIoCompletions(std::span<mattsql::IoCompletion>(&completion, 1));
+  EXPECT_TRUE(mattsql::status_ok(completion_count.status));
+  EXPECT_EQ(*completion_count.value, 0U);
 }

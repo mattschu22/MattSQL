@@ -186,6 +186,21 @@ from_abi_page_allocation(const mattsql_abi_page_allocation &allocation) {
   return runtime.version == MATTSQL_ABI_RUNTIME_VERSION;
 }
 
+[[nodiscard]] bool is_power_of_two(std::size_t value) {
+  return value != 0 && (value & (value - 1U)) == 0;
+}
+
+[[nodiscard]] bool valid_abi_bool(std::uint8_t value) { return value <= 1; }
+
+[[nodiscard]] bool
+valid_capability_booleans(const mattsql_abi_runtime_capabilities &capabilities) {
+  return valid_abi_bool(capabilities.supports_async_io) &&
+         valid_abi_bool(capabilities.supports_flush) &&
+         valid_abi_bool(capabilities.supports_barriers) &&
+         valid_abi_bool(capabilities.supports_physical_addresses) &&
+         valid_abi_bool(capabilities.supports_dma_memory);
+}
+
 } // namespace
 
 CAbiPlatformRuntime::CAbiPlatformRuntime(mattsql_abi_runtime_v1 runtime)
@@ -226,6 +241,9 @@ RuntimeCapabilities CAbiPlatformRuntime::GetCapabilities() const {
       runtime_.get_capabilities(runtime_.context, &abi_capabilities);
   if (!abi_status_ok(status)) {
     return capabilities;
+  }
+  if (!valid_capability_booleans(abi_capabilities)) {
+    return RuntimeCapabilities{};
   }
 
   capabilities.page_size = size_or_zero(abi_capabilities.page_size);
@@ -270,6 +288,19 @@ CAbiPlatformRuntime::AllocatePages(std::size_t page_count, std::size_t alignment
     return error_result<RuntimePageAllocation>(
         ErrorCode::Internal, "C ABI page allocation metadata is too large");
   }
+  if ((allocation.flags & ~kKnownRuntimeMemoryFlags) != 0) {
+    return error_result<RuntimePageAllocation>(
+        ErrorCode::Internal, "C ABI page allocation flags are invalid");
+  }
+  if (allocation.data == nullptr || allocation.page_count == 0 ||
+      allocation.page_size == 0 || allocation.alignment == 0) {
+    return error_result<RuntimePageAllocation>(
+        ErrorCode::Internal, "C ABI page allocation metadata is invalid");
+  }
+  if (!is_power_of_two(static_cast<std::size_t>(allocation.alignment))) {
+    return error_result<RuntimePageAllocation>(
+        ErrorCode::Internal, "C ABI page allocation alignment is invalid");
+  }
   return ok_result(from_abi_page_allocation(allocation));
 }
 
@@ -278,6 +309,16 @@ Status CAbiPlatformRuntime::FreePages(
   const auto validation_status = Validate();
   if (!status_ok(validation_status)) {
     return validation_status;
+  }
+  if ((allocation.flags & ~kKnownRuntimeMemoryFlags) != 0) {
+    return error_status(ErrorCode::InvalidArgument,
+                        "unknown page allocation flags");
+  }
+  if (allocation.data == nullptr || allocation.page_count == 0 ||
+      allocation.page_size == 0 || allocation.alignment == 0 ||
+      !is_power_of_two(allocation.alignment)) {
+    return error_status(ErrorCode::InvalidArgument,
+                        "page allocation metadata is invalid");
   }
 
   const auto abi_allocation = to_abi_page_allocation(allocation);
@@ -338,6 +379,18 @@ CAbiPlatformRuntime::SubmitIoBatch(std::span<const IoRequest> requests) {
     return error_result<IoSubmissionResult>(
         ErrorCode::Internal, "C ABI submitted count is too large");
   }
+  if (abi_submission.submitted_count !=
+      static_cast<std::uint64_t>(requests.size())) {
+    return error_result<IoSubmissionResult>(
+        ErrorCode::Internal,
+        "C ABI submitted count violates all-or-error submission");
+  }
+  if (abi_submission.first_request_id == 0 ||
+      (requests.front().id != 0 &&
+       abi_submission.first_request_id != requests.front().id)) {
+    return error_result<IoSubmissionResult>(
+        ErrorCode::Internal, "C ABI first request ID is invalid");
+  }
 
   IoSubmissionResult submission;
   submission.submitted_count =
@@ -374,6 +427,10 @@ CAbiPlatformRuntime::PollIoCompletions(std::span<IoCompletion> completions) {
   const auto converted_count = static_cast<std::size_t>(completion_count);
   for (std::size_t index = 0; index < converted_count; ++index) {
     const auto &abi_completion = abi_completions[index];
+    if (abi_completion.id == 0) {
+      return error_result<std::size_t>(
+          ErrorCode::Internal, "C ABI completion request id is invalid");
+    }
     if (!fits_size_t(abi_completion.bytes_transferred)) {
       return error_result<std::size_t>(
           ErrorCode::Internal, "C ABI completion byte count is too large");

@@ -1,8 +1,11 @@
 #pragma once
 
+#include <array>
+#include <cassert>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace mattsql {
 
@@ -23,36 +26,33 @@ enum class ErrorCode {
   Internal
 };
 
+struct ErrorCodeNameEntry {
+  ErrorCode code;
+  std::string_view name;
+};
+
+inline constexpr std::array<ErrorCodeNameEntry, 14> kErrorCodeNames = {{
+    {ErrorCode::Ok, "Ok"},
+    {ErrorCode::InvalidArgument, "InvalidArgument"},
+    {ErrorCode::NotFound, "NotFound"},
+    {ErrorCode::AlreadyExists, "AlreadyExists"},
+    {ErrorCode::TypeMismatch, "TypeMismatch"},
+    {ErrorCode::ParseError, "ParseError"},
+    {ErrorCode::BindError, "BindError"},
+    {ErrorCode::PlanError, "PlanError"},
+    {ErrorCode::ExecutionError, "ExecutionError"},
+    {ErrorCode::IoError, "IoError"},
+    {ErrorCode::Corruption, "Corruption"},
+    {ErrorCode::TransactionConflict, "TransactionConflict"},
+    {ErrorCode::NotSupported, "NotSupported"},
+    {ErrorCode::Internal, "Internal"},
+}};
+
 [[nodiscard]] inline std::string_view ErrorCodeName(ErrorCode code) {
-  switch (code) {
-  case ErrorCode::Ok:
-    return "Ok";
-  case ErrorCode::InvalidArgument:
-    return "InvalidArgument";
-  case ErrorCode::NotFound:
-    return "NotFound";
-  case ErrorCode::AlreadyExists:
-    return "AlreadyExists";
-  case ErrorCode::TypeMismatch:
-    return "TypeMismatch";
-  case ErrorCode::ParseError:
-    return "ParseError";
-  case ErrorCode::BindError:
-    return "BindError";
-  case ErrorCode::PlanError:
-    return "PlanError";
-  case ErrorCode::ExecutionError:
-    return "ExecutionError";
-  case ErrorCode::IoError:
-    return "IoError";
-  case ErrorCode::Corruption:
-    return "Corruption";
-  case ErrorCode::TransactionConflict:
-    return "TransactionConflict";
-  case ErrorCode::NotSupported:
-    return "NotSupported";
-  case ErrorCode::Internal:
-    return "Internal";
+  for (const auto &entry : kErrorCodeNames) {
+    if (entry.code == code) {
+      return entry.name;
+    }
   }
 
   return "Unknown";
@@ -60,47 +60,10 @@ enum class ErrorCode {
 
 [[nodiscard]] inline std::optional<ErrorCode>
 ParseErrorCodeName(std::string_view name) {
-  if (name == "Ok") {
-    return ErrorCode::Ok;
-  }
-  if (name == "InvalidArgument") {
-    return ErrorCode::InvalidArgument;
-  }
-  if (name == "NotFound") {
-    return ErrorCode::NotFound;
-  }
-  if (name == "AlreadyExists") {
-    return ErrorCode::AlreadyExists;
-  }
-  if (name == "TypeMismatch") {
-    return ErrorCode::TypeMismatch;
-  }
-  if (name == "ParseError") {
-    return ErrorCode::ParseError;
-  }
-  if (name == "BindError") {
-    return ErrorCode::BindError;
-  }
-  if (name == "PlanError") {
-    return ErrorCode::PlanError;
-  }
-  if (name == "ExecutionError") {
-    return ErrorCode::ExecutionError;
-  }
-  if (name == "IoError") {
-    return ErrorCode::IoError;
-  }
-  if (name == "Corruption") {
-    return ErrorCode::Corruption;
-  }
-  if (name == "TransactionConflict") {
-    return ErrorCode::TransactionConflict;
-  }
-  if (name == "NotSupported") {
-    return ErrorCode::NotSupported;
-  }
-  if (name == "Internal") {
-    return ErrorCode::Internal;
+  for (const auto &entry : kErrorCodeNames) {
+    if (entry.name == name) {
+      return entry.code;
+    }
   }
 
   return std::nullopt;
@@ -114,6 +77,28 @@ struct Status {
 template <typename T> struct Result {
   Status status;
   std::optional<T> value;
+
+  [[nodiscard]] bool ok() const { return status.code == ErrorCode::Ok; }
+  [[nodiscard]] bool has_value() const { return value.has_value(); }
+  [[nodiscard]] explicit operator bool() const { return ok(); }
+
+  [[nodiscard]] T &Value() & {
+    assert(ok());
+    assert(value.has_value());
+    return *value;
+  }
+
+  [[nodiscard]] const T &Value() const & {
+    assert(ok());
+    assert(value.has_value());
+    return *value;
+  }
+
+  [[nodiscard]] T &&TakeValue() && {
+    assert(ok());
+    assert(value.has_value());
+    return std::move(*value);
+  }
 };
 
 } // namespace mattsql

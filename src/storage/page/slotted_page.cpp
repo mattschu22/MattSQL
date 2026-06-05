@@ -1,6 +1,7 @@
 #include "mattsql/storage/page/slotted_page.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/storage/byte_io.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -23,14 +24,11 @@ struct SlotEntry {
 
 [[nodiscard]] std::uint16_t read_u16(std::span<const std::byte> bytes,
                                      std::size_t offset) {
-  const auto low = std::to_integer<std::uint16_t>(bytes[offset]);
-  const auto high = std::to_integer<std::uint16_t>(bytes[offset + 1]);
-  return static_cast<std::uint16_t>(low | static_cast<std::uint16_t>(high << 8U));
+  return ReadLittleEndianAt<std::uint16_t>(bytes, offset);
 }
 
 void write_u16(std::span<std::byte> bytes, std::size_t offset, std::uint16_t value) {
-  bytes[offset] = static_cast<std::byte>(value & 0x00FFU);
-  bytes[offset + 1] = static_cast<std::byte>((value >> 8U) & 0x00FFU);
+  WriteLittleEndianAt(bytes, offset, value);
 }
 
 [[nodiscard]] SlotEntry read_slot(std::span<const std::byte> bytes, SlotId slot_id) {

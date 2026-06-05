@@ -15,6 +15,7 @@ struct InMemoryHostedCatalogApi::Impl {
 
   std::unordered_map<std::string, TableInfo> tables_by_name;
   std::unordered_map<TableId, std::string> table_names_by_id;
+  std::unordered_map<IndexId, std::pair<std::string, std::string>> index_keys_by_id;
   std::unordered_map<std::string, std::unordered_map<std::string, IndexInfo>>
       indexes_by_table_name;
 };
@@ -44,6 +45,10 @@ Result<TableInfo> InMemoryHostedCatalogApi::StoreTable(std::string_view table_ke
   if (impl_->tables_by_name.contains(key)) {
     return error_result<TableInfo>(ErrorCode::AlreadyExists, "table already exists");
   }
+  if (impl_->table_names_by_id.contains(table.id)) {
+    return error_result<TableInfo>(ErrorCode::AlreadyExists,
+                                   "table id already exists");
+  }
 
   impl_->table_names_by_id.emplace(table.id, key);
   impl_->tables_by_name.emplace(key, table);
@@ -58,6 +63,9 @@ Status InMemoryHostedCatalogApi::EraseTable(std::string_view table_key) {
   }
 
   impl_->table_names_by_id.erase(table_iter->second.id);
+  for (const auto &index : table_iter->second.indexes) {
+    impl_->index_keys_by_id.erase(index.id);
+  }
   impl_->indexes_by_table_name.erase(key);
   impl_->tables_by_name.erase(table_iter);
   return ok_status();
@@ -121,6 +129,14 @@ Result<IndexInfo> InMemoryHostedCatalogApi::StoreIndex(std::string_view table_ke
   if (!status_ok(table.status)) {
     return error_result<IndexInfo>(table.status.code, table.status.message);
   }
+  if (index.table_id != table.value->id) {
+    return error_result<IndexInfo>(ErrorCode::InvalidArgument,
+                                   "index table id does not match table");
+  }
+  if (impl_->index_keys_by_id.contains(index.id)) {
+    return error_result<IndexInfo>(ErrorCode::AlreadyExists,
+                                   "index id already exists");
+  }
 
   const std::string key(index_key);
   auto &indexes = impl_->indexes_by_table_name[std::string(table_key)];
@@ -131,6 +147,8 @@ Result<IndexInfo> InMemoryHostedCatalogApi::StoreIndex(std::string_view table_ke
   auto table_iter = impl_->tables_by_name.find(std::string(table_key));
   table_iter->second.indexes.push_back(index);
   indexes.emplace(key, index);
+  impl_->index_keys_by_id.emplace(index.id,
+                                  std::make_pair(std::string(table_key), key));
   return ok_result(index);
 }
 

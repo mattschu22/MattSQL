@@ -4,6 +4,13 @@ MattSQL is a C++20 SQL engine playground with a hosted in-memory execution
 path and an emerging runtime boundary for database-oriented operating-system
 experiments.
 
+Related docs:
+
+- [Docs index](../README.md)
+- [Overview](../overview.md)
+- [Code-level invariants](../reference/invariants.md)
+- [Runtime C ABI](../reference/runtime_abi.md)
+
 ## Implemented Pipeline
 
 The primary query path is:
@@ -15,6 +22,15 @@ The primary query path is:
 5. `DefaultOptimizer` applies rule-based logical rewrites.
 6. `DefaultPhysicalPlanner` creates executable physical operators.
 7. `DefaultExecutor` runs physical plans against catalog and table storage.
+
+Bound expressions, bound statements, logical operators, and physical operators
+derive their node kind from the concrete subclass through `Kind()` accessors.
+This keeps the polymorphic type and the dispatch tag in sync without requiring
+callers or tests to set mutable kind fields manually.
+
+Expression evaluation lives in `src/execution/expression_evaluator.cpp`; the
+executor owns physical operator execution and delegates scalar expression work
+to the evaluator.
 
 The supported SQL surface is intentionally small: `CREATE TABLE`,
 `INSERT ... VALUES`, scalar `SELECT`, table `SELECT`, projection aliases,
@@ -44,10 +60,14 @@ runtime supports runtime-managed page spans, synchronous block-device-backed
 batch I/O, completion polling, cooperative yield, monotonic time, logging, and
 panic.
 
+C++ callers can use `RuntimePageAllocationHandle` for move-only RAII ownership
+of runtime page spans. The raw `AllocatePages`/`FreePages` shape remains for C
+ABI and explicit boundary code.
+
 The C ABI runtime adapter exposes the same MVP runtime concepts through
 `include/mattsql/abi/runtime.h`. ABI version 1 is documented in
-`docs/runtime_abi.md` and is covered by C++ layout tests plus a Rust layout
-compile check when `rustc` is available.
+[`docs/reference/runtime_abi.md`](../reference/runtime_abi.md) and is covered
+by C++ layout tests plus a Rust layout compile check when `rustc` is available.
 
 ## Test Coverage
 
@@ -56,8 +76,9 @@ Coverage includes lexer, parser, binder, planner, optimizer, executor, catalog,
 storage, runtime, C ABI layout, C ABI adapter behavior, SQL logic scripts, and a
 deterministic SQL logic fuzzer.
 
-The SQL logic runner and fuzzer live in `tests/sql_logic_support.cpp`; the test
-registration file is intentionally small.
+The SQL logic runner, formatter, and deterministic fuzzer are split across
+`tests/sql_logic_support.cpp`, `tests/sql_logic_format.hpp`, and
+`tests/sql_logic_fuzzer.cpp`; the test registration file is intentionally small.
 
 ## Current Gaps
 

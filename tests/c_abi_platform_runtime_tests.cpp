@@ -32,6 +32,16 @@ struct FakeAbiRuntimeState {
   std::uint64_t next_request_id = 1;
   std::uint64_t nanos = 123456789;
   bool yielded = false;
+  bool fail_yield = false;
+  bool fail_clock = false;
+  bool return_invalid_capability_boolean = false;
+  bool return_invalid_allocation_metadata = false;
+  bool return_unknown_allocation_flags = false;
+  bool return_non_power_allocation_alignment = false;
+  bool return_invalid_submission_count = false;
+  bool return_invalid_first_request_id = false;
+  bool return_invalid_completion_count = false;
+  bool return_zero_completion_id = false;
   mattsql_abi_log_level last_log_level = MATTSQL_ABI_LOG_TRACE;
   std::string last_log_message;
 };
@@ -56,6 +66,9 @@ fake_get_capabilities(void *context,
   out_capabilities->supports_barriers = 1;
   out_capabilities->supports_physical_addresses = 0;
   out_capabilities->supports_dma_memory = 0;
+  if (state->return_invalid_capability_boolean) {
+    out_capabilities->supports_flush = 2;
+  }
   return abi_ok();
 }
 
@@ -63,13 +76,40 @@ mattsql_abi_status fake_allocate_pages(void *context, std::uint64_t page_count,
                                        std::uint64_t alignment,
                                        mattsql_abi_runtime_memory_flags flags,
                                        mattsql_abi_page_allocation *out_allocation) {
-  (void)context;
   if (page_count == 0 || out_allocation == nullptr) {
     return abi_error(MATTSQL_ABI_STATUS_INVALID_ARGUMENT,
                      "invalid page allocation request");
   }
   if ((flags & MATTSQL_ABI_MEMORY_DMA) != 0) {
     return abi_error(MATTSQL_ABI_STATUS_NOT_SUPPORTED, "DMA memory is not supported");
+  }
+
+  auto *state = static_cast<FakeAbiRuntimeState *>(context);
+  if (state != nullptr && state->return_unknown_allocation_flags) {
+    *out_allocation = {};
+    out_allocation->data = reinterpret_cast<void *>(std::uintptr_t{0x1000});
+    out_allocation->page_count = 1;
+    out_allocation->page_size = mattsql::kDefaultPageSize;
+    out_allocation->alignment = alignment;
+    out_allocation->flags = flags | (1U << 12U);
+    return abi_ok();
+  }
+  if (state != nullptr && state->return_non_power_allocation_alignment) {
+    *out_allocation = {};
+    out_allocation->data = reinterpret_cast<void *>(std::uintptr_t{0x1000});
+    out_allocation->page_count = 1;
+    out_allocation->page_size = mattsql::kDefaultPageSize;
+    out_allocation->alignment = 3;
+    out_allocation->flags = flags;
+    return abi_ok();
+  }
+  if (state != nullptr && state->return_invalid_allocation_metadata) {
+    *out_allocation = {};
+    out_allocation->page_count = 1;
+    out_allocation->page_size = mattsql::kDefaultPageSize;
+    out_allocation->alignment = alignment;
+    out_allocation->flags = flags;
+    return abi_ok();
   }
 
   const auto byte_count =
@@ -117,6 +157,15 @@ fake_submit_io_batch(void *context, const mattsql_abi_io_request *requests,
   auto *state = static_cast<FakeAbiRuntimeState *>(context);
   *out_submission = {};
   out_submission->submitted_count = request_count;
+  if (state->return_invalid_submission_count) {
+    out_submission->submitted_count = request_count + 1;
+    out_submission->first_request_id = 1;
+    return abi_ok();
+  }
+  if (state->return_invalid_first_request_id) {
+    out_submission->first_request_id = 0;
+    return abi_ok();
+  }
 
   for (std::uint64_t index = 0; index < request_count; ++index) {
     const auto &request = requests[index];
@@ -177,6 +226,18 @@ mattsql_abi_status fake_poll_io_completions(void *context,
   }
 
   auto *state = static_cast<FakeAbiRuntimeState *>(context);
+  if (state->return_zero_completion_id) {
+    completions[0] = {};
+    completions[0].id = 0;
+    completions[0].status = abi_ok();
+    *out_completion_count = 1;
+    return abi_ok();
+  }
+  if (state->return_invalid_completion_count) {
+    *out_completion_count = max_completion_count + 1;
+    return abi_ok();
+  }
+
   std::uint64_t count = 0;
   while (count < max_completion_count && !state->completions.empty()) {
     completions[count] = state->completions.front();
@@ -191,7 +252,11 @@ mattsql_abi_status fake_yield(void *context) {
   if (context == nullptr) {
     return abi_error(MATTSQL_ABI_STATUS_INVALID_ARGUMENT, "missing context");
   }
-  static_cast<FakeAbiRuntimeState *>(context)->yielded = true;
+  auto *state = static_cast<FakeAbiRuntimeState *>(context);
+  if (state->fail_yield) {
+    return abi_error(MATTSQL_ABI_STATUS_INTERNAL, "yield failed");
+  }
+  state->yielded = true;
   return abi_ok();
 }
 
@@ -199,7 +264,11 @@ mattsql_abi_status fake_monotonic_nanos(void *context, std::uint64_t *out_nanos)
   if (context == nullptr || out_nanos == nullptr) {
     return abi_error(MATTSQL_ABI_STATUS_INVALID_ARGUMENT, "missing clock output");
   }
-  *out_nanos = static_cast<FakeAbiRuntimeState *>(context)->nanos;
+  auto *state = static_cast<FakeAbiRuntimeState *>(context);
+  if (state->fail_clock) {
+    return abi_error(MATTSQL_ABI_STATUS_INTERNAL, "clock failed");
+  }
+  *out_nanos = state->nanos;
   return abi_ok();
 }
 
@@ -261,6 +330,12 @@ TEST_CASE(c_abi_runtime_adapts_capabilities_memory_time_and_logs) {
   EXPECT_TRUE(capabilities.supports_barriers);
   EXPECT_TRUE(!capabilities.supports_dma_memory);
 
+  state.return_invalid_capability_boolean = true;
+  const auto invalid_capabilities = runtime.GetCapabilities();
+  EXPECT_EQ(invalid_capabilities.block_size, 0U);
+  EXPECT_TRUE(!invalid_capabilities.supports_flush);
+  state.return_invalid_capability_boolean = false;
+
   auto allocation_result =
       runtime.AllocatePages(1, 8192, mattsql::kRuntimeMemoryZeroed);
   EXPECT_TRUE(mattsql::status_ok(allocation_result.status));
@@ -280,6 +355,20 @@ TEST_CASE(c_abi_runtime_adapts_capabilities_memory_time_and_logs) {
       runtime.AllocatePages(1, 8192, std::uint32_t{1U << 12U});
   EXPECT_TRUE(unknown_flag_allocation.status.code ==
               mattsql::ErrorCode::InvalidArgument);
+
+  auto *bad_free_data =
+      ::operator new(mattsql::kDefaultPageSize, std::align_val_t(8192));
+  mattsql::RuntimePageAllocation bad_free_allocation;
+  bad_free_allocation.data = bad_free_data;
+  bad_free_allocation.page_count = 1;
+  bad_free_allocation.page_size = mattsql::kDefaultPageSize;
+  bad_free_allocation.alignment = 8192;
+  bad_free_allocation.flags = std::uint32_t{1U << 12U};
+  const auto bad_free_status = runtime.FreePages(bad_free_allocation);
+  EXPECT_TRUE(bad_free_status.code == mattsql::ErrorCode::InvalidArgument);
+  if (bad_free_status.code == mattsql::ErrorCode::InvalidArgument) {
+    ::operator delete(bad_free_data, std::align_val_t(8192));
+  }
 
   EXPECT_EQ(runtime.MonotonicNanos(), std::uint64_t{123456789});
   EXPECT_TRUE(mattsql::status_ok(runtime.Yield()));
@@ -377,4 +466,79 @@ TEST_CASE(c_abi_runtime_rejects_invalid_adapter_requests) {
   task.name = "not supported";
   auto task_result = runtime.SpawnTask(task);
   EXPECT_TRUE(task_result.status.code == mattsql::ErrorCode::NotSupported);
+}
+
+/// Verifies successful ABI callbacks still have to return valid v1 metadata.
+TEST_CASE(c_abi_runtime_rejects_invalid_backend_success_metadata) {
+  FakeAbiRuntimeState state;
+  mattsql::CAbiPlatformRuntime runtime(make_fake_runtime(state));
+  std::vector<std::byte> buffer(32, std::byte{0x11});
+
+  state.return_invalid_allocation_metadata = true;
+  auto allocation =
+      runtime.AllocatePages(1, 8192, mattsql::kRuntimeMemoryZeroed);
+  EXPECT_TRUE(allocation.status.code == mattsql::ErrorCode::Internal);
+  state.return_invalid_allocation_metadata = false;
+
+  state.return_unknown_allocation_flags = true;
+  allocation = runtime.AllocatePages(1, 8192, mattsql::kRuntimeMemoryZeroed);
+  EXPECT_TRUE(allocation.status.code == mattsql::ErrorCode::Internal);
+  state.return_unknown_allocation_flags = false;
+
+  state.return_non_power_allocation_alignment = true;
+  allocation = runtime.AllocatePages(1, 8192, mattsql::kRuntimeMemoryZeroed);
+  EXPECT_TRUE(allocation.status.code == mattsql::ErrorCode::Internal);
+  state.return_non_power_allocation_alignment = false;
+
+  mattsql::IoRequest request;
+  request.operation = mattsql::IoOperation::Write;
+  request.offset = 0;
+  request.buffer = test::mutable_view(buffer);
+
+  state.return_invalid_submission_count = true;
+  auto submission =
+      runtime.SubmitIoBatch(std::span<const mattsql::IoRequest>(&request, 1));
+  EXPECT_TRUE(submission.status.code == mattsql::ErrorCode::Internal);
+  state.return_invalid_submission_count = false;
+
+  state.return_invalid_first_request_id = true;
+  auto first_id_submission =
+      runtime.SubmitIoBatch(std::span<const mattsql::IoRequest>(&request, 1));
+  EXPECT_TRUE(first_id_submission.status.code == mattsql::ErrorCode::Internal);
+  state.return_invalid_first_request_id = false;
+
+  state.return_invalid_completion_count = true;
+  std::vector<mattsql::IoCompletion> completions(1);
+  auto completion_count = runtime.PollIoCompletions(
+      std::span<mattsql::IoCompletion>(completions.data(), completions.size()));
+  EXPECT_TRUE(completion_count.status.code == mattsql::ErrorCode::Internal);
+  state.return_invalid_completion_count = false;
+
+  state.return_zero_completion_id = true;
+  completion_count = runtime.PollIoCompletions(
+      std::span<mattsql::IoCompletion>(completions.data(), completions.size()));
+  EXPECT_TRUE(completion_count.status.code == mattsql::ErrorCode::Internal);
+  state.return_zero_completion_id = false;
+}
+
+/// Verifies optional and failing non-I/O callbacks keep their boundary semantics.
+TEST_CASE(c_abi_runtime_handles_optional_and_failed_callbacks) {
+  FakeAbiRuntimeState state;
+  auto optional_yield_table = make_fake_runtime(state);
+  optional_yield_table.yield = nullptr;
+  mattsql::CAbiPlatformRuntime optional_yield_runtime(optional_yield_table);
+
+  EXPECT_TRUE(mattsql::status_ok(optional_yield_runtime.Validate()));
+  EXPECT_TRUE(mattsql::status_ok(optional_yield_runtime.Yield()));
+  EXPECT_TRUE(!state.yielded);
+
+  mattsql::CAbiPlatformRuntime runtime(make_fake_runtime(state));
+  state.fail_yield = true;
+  const auto yield_status = runtime.Yield();
+  EXPECT_TRUE(yield_status.code == mattsql::ErrorCode::Internal);
+  EXPECT_TRUE(!yield_status.message.empty());
+  state.fail_yield = false;
+
+  state.fail_clock = true;
+  EXPECT_EQ(runtime.MonotonicNanos(), std::uint64_t{0});
 }

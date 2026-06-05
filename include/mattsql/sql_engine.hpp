@@ -63,12 +63,8 @@ public:
   PlatformRuntime &GetRuntime() override;
 
 private:
-  std::unique_ptr<Catalog> owned_catalog_;
-  std::unique_ptr<TableStorageManager> owned_storage_;
-  std::unique_ptr<PlatformRuntime> owned_runtime_;
-  Catalog *catalog_ = nullptr;
-  TableStorageManager *storage_ = nullptr;
-  PlatformRuntime *runtime_ = nullptr;
+  struct Components;
+  std::unique_ptr<Components> components_;
 };
 
 } // namespace mattsql

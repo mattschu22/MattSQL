@@ -27,19 +27,21 @@ function(mattsql_apply_warnings target)
   endif()
 endfunction()
 
-add_library(
-  mattsql_core
+set(
+  MATTSQL_CORE_SOURCES
   src/binder/default_binder.cpp
   src/binder/expression_utils.cpp
   src/catalog/hosted_catalog_api.cpp
   src/catalog/in_memory_catalog.cpp
   src/execution/default_executor.cpp
+  src/execution/expression_evaluator.cpp
   src/lexer/lexer.cpp
   src/optimizer/default_optimizer.cpp
   src/parser/parser.cpp
   src/planner/default_logical_planner.cpp
   src/planner/default_physical_planner.cpp
   src/runtime/c_abi_platform_runtime.cpp
+  src/runtime/c_abi_runtime_provider.cpp
   src/runtime/hosted_platform_runtime.cpp
   src/runtime/platform.cpp
   src/sql_engine.cpp
@@ -49,6 +51,8 @@ add_library(
   src/storage/page/slotted_page.cpp
   src/storage/tuple_codec.cpp
 )
+
+add_library(mattsql_core ${MATTSQL_CORE_SOURCES})
 add_library(MattSQL::core ALIAS mattsql_core)
 
 target_include_directories(
@@ -66,11 +70,12 @@ mattsql_apply_warnings(mattsql)
 include(CTest)
 
 if(BUILD_TESTING)
-  add_executable(
-    mattsql_tests
+  set(
+    MATTSQL_TEST_SOURCES
     tests/abi_layout_tests.cpp
     tests/binder_tests.cpp
     tests/c_abi_platform_runtime_tests.cpp
+    tests/c_abi_runtime_provider_tests.cpp
     tests/catalog_tests.cpp
     tests/executor_tests.cpp
     tests/hosted_platform_runtime_tests.cpp
@@ -85,10 +90,13 @@ if(BUILD_TESTING)
     tests/page_heap_table_tests.cpp
     tests/slotted_page_tests.cpp
     tests/sql_engine_tests.cpp
+    tests/sql_logic_fuzzer.cpp
     tests/sql_logic_support.cpp
     tests/sql_logic_tests.cpp
     tests/test_main.cpp
   )
+
+  add_executable(mattsql_tests ${MATTSQL_TEST_SOURCES})
   target_link_libraries(mattsql_tests PRIVATE MattSQL::core)
   target_compile_definitions(
     mattsql_tests
@@ -98,6 +106,15 @@ if(BUILD_TESTING)
   mattsql_apply_warnings(mattsql_tests)
 
   add_test(NAME mattsql.tests COMMAND mattsql_tests)
+  add_test(
+    NAME mattsql.cli_semicolon_split
+    COMMAND
+      ${CMAKE_COMMAND}
+      "-DMATTSQL_CLI=$<TARGET_FILE:mattsql>"
+      "-DSQL_FILE=${PROJECT_SOURCE_DIR}/tests/cli/trailing_unclosed_comment.sql"
+      -P
+      ${PROJECT_SOURCE_DIR}/tests/cmake/cli_semicolon_split.cmake
+  )
 
   find_program(MATTSQL_RUSTC rustc)
   if(MATTSQL_RUSTC)

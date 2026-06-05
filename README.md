@@ -32,6 +32,11 @@ ctest --preset debug
 Tests use CTest and a tiny local test harness in `tests/test_framework.hpp`, so
 the project has no dependency downloads.
 
+## Docs
+
+Start with [docs/README.md](docs/README.md) for the overview, current
+implementation state, code-level invariants, and runtime ABI contract.
+
 ## Debug
 
 Open the folder in VS Code and use the `Debug MattSQL` launch configuration. It

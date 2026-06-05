@@ -4,6 +4,7 @@
 #include "test_framework.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <variant>
 
@@ -113,6 +114,74 @@ TEST_CASE(default_sql_engine_returns_status_errors) {
               mattsql::ErrorCode::ParseError);
   EXPECT_TRUE(engine.Execute("SELECT 'missing end;").status.code ==
               mattsql::ErrorCode::ParseError);
+}
+
+/// Verifies the most negative signed integer literal parses as a valid value.
+TEST_CASE(default_sql_engine_accepts_int64_min_literal) {
+  mattsql::DefaultSqlEngine engine;
+
+  const auto result = engine.Execute("SELECT -9223372036854775808 AS min_value;");
+
+  EXPECT_TRUE(mattsql::status_ok(result.status));
+  EXPECT_EQ(result.value->rows.size(), 1U);
+  EXPECT_EQ(std::get<std::int64_t>(result.value->rows[0][0]),
+            std::numeric_limits<std::int64_t>::min());
+}
+
+/// Verifies integer addition overflow fails instead of wrapping.
+TEST_CASE(default_sql_engine_rejects_integer_addition_overflow) {
+  mattsql::DefaultSqlEngine engine;
+
+  const auto result = engine.Execute("SELECT 9223372036854775807 + 1;");
+
+  EXPECT_TRUE(result.status.code == mattsql::ErrorCode::ExecutionError);
+}
+
+/// Verifies integer subtraction underflow fails instead of wrapping.
+TEST_CASE(default_sql_engine_rejects_integer_subtraction_underflow) {
+  mattsql::DefaultSqlEngine engine;
+
+  const auto result = engine.Execute("SELECT -9223372036854775807 - 2;");
+
+  EXPECT_TRUE(result.status.code == mattsql::ErrorCode::ExecutionError);
+}
+
+/// Verifies integer multiplication overflow fails instead of wrapping.
+TEST_CASE(default_sql_engine_rejects_integer_multiplication_overflow) {
+  mattsql::DefaultSqlEngine engine;
+
+  const auto result = engine.Execute("SELECT 9223372036854775807 * 2;");
+
+  EXPECT_TRUE(result.status.code == mattsql::ErrorCode::ExecutionError);
+}
+
+/// Verifies unary negation overflow fails instead of returning INT64_MIN.
+TEST_CASE(default_sql_engine_rejects_unary_negation_overflow) {
+  mattsql::DefaultSqlEngine engine;
+
+  const auto result = engine.Execute("SELECT -(-9223372036854775807 - 1);");
+
+  EXPECT_TRUE(result.status.code == mattsql::ErrorCode::ExecutionError);
+}
+
+/// Verifies INT64_MIN / -1 fails instead of overflowing.
+TEST_CASE(default_sql_engine_rejects_integer_division_overflow) {
+  mattsql::DefaultSqlEngine engine;
+
+  const auto result = engine.Execute("SELECT (-9223372036854775807 - 1) / -1;");
+
+  EXPECT_TRUE(result.status.code == mattsql::ErrorCode::ExecutionError);
+}
+
+/// Verifies SQL NOT binds looser than comparison operators.
+TEST_CASE(default_sql_engine_parses_not_at_comparison_precedence) {
+  mattsql::DefaultSqlEngine engine;
+
+  const auto result = engine.Execute("SELECT NOT 1 = 2 AS should_be_true;");
+
+  EXPECT_TRUE(mattsql::status_ok(result.status));
+  EXPECT_EQ(result.value->rows.size(), 1U);
+  EXPECT_EQ(std::get<bool>(result.value->rows[0][0]), true);
 }
 
 /// Verifies read-only transactions can still execute read statements.

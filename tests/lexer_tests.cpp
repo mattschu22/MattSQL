@@ -73,14 +73,27 @@ TEST_CASE(tokenizes_boolean_keywords_and_identifier_prefixes) {
 
 /// Verifies comments are skipped while multiline locations remain correct.
 TEST_CASE(skips_comments_and_tracks_multiline_locations) {
-  mattsql::Lexer lexer("-- ignored\n/* also ignored */\nSELECT\n  42");
+  {
+    mattsql::Lexer lexer("-- ignored\n/* also ignored */\nSELECT\n  42");
 
-  const auto tokens = lexer.Tokenize();
+    const auto tokens = lexer.Tokenize();
 
-  EXPECT_EQ(tokens.size(), 3U);
-  expect_token(tokens, 0, mattsql::TokenType::Select, "SELECT", 3U, 1U);
-  expect_token(tokens, 1, mattsql::TokenType::Integer, "42", 4U, 3U);
-  expect_token(tokens, 2, mattsql::TokenType::EndOfFile, "", 4U, 5U);
+    EXPECT_EQ(tokens.size(), 3U);
+    expect_token(tokens, 0, mattsql::TokenType::Select, "SELECT", 3U, 1U);
+    expect_token(tokens, 1, mattsql::TokenType::Integer, "42", 4U, 3U);
+    expect_token(tokens, 2, mattsql::TokenType::EndOfFile, "", 4U, 5U);
+  }
+
+  {
+    mattsql::Lexer lexer("-- ignored\rSELECT 1");
+
+    const auto tokens = lexer.Tokenize();
+
+    EXPECT_EQ(tokens.size(), 3U);
+    expect_token(tokens, 0, mattsql::TokenType::Select, "SELECT", 1U, 12U);
+    expect_token(tokens, 1, mattsql::TokenType::Integer, "1", 1U, 19U);
+    expect_token(tokens, 2, mattsql::TokenType::EndOfFile, "", 1U, 20U);
+  }
 }
 
 /// Verifies malformed lexemes are emitted as invalid tokens.

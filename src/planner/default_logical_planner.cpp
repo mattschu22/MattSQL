@@ -13,7 +13,6 @@ namespace {
 
 [[nodiscard]] LogicalPlanPtr make_seq_scan_plan(const TableInfo &table) {
   auto scan = std::make_unique<LogicalSeqScan>();
-  scan->kind = LogicalOperatorKind::SeqScan;
   scan->table = table;
   return scan;
 }
@@ -34,7 +33,6 @@ namespace {
   }
 
   auto filter = std::make_unique<LogicalFilter>();
-  filter->kind = LogicalOperatorKind::Filter;
   filter->predicate = std::move(predicate);
   filter->children.push_back(std::move(child));
   return ok_result<LogicalPlanPtr>(std::move(filter));
@@ -68,7 +66,6 @@ plan_select(const BoundSelectStatement &statement) {
     }
 
     auto values = std::make_unique<LogicalValues>();
-    values->kind = LogicalOperatorKind::Values;
     // Scalar SELECT operates over exactly one empty input row.
     values->rows.emplace_back();
     source = std::move(values);
@@ -93,7 +90,6 @@ plan_select(const BoundSelectStatement &statement) {
   }
 
   auto projection = std::make_unique<LogicalProjection>();
-  projection->kind = LogicalOperatorKind::Projection;
   projection->projections = std::move(*projections.value);
   projection->projection_names = statement.projection_names;
   projection->children.push_back(std::move(source));
@@ -121,13 +117,11 @@ plan_insert(const BoundInsertStatement &statement) {
   }
 
   auto values = std::make_unique<LogicalValues>();
-  values->kind = LogicalOperatorKind::Values;
   // Keep logical VALUES as bound expressions until the storage tuple encoder is
   // available; otherwise INSERT planning would discard the row payload.
   values->rows.push_back(std::move(*row.value));
 
   auto insert = std::make_unique<LogicalInsert>();
-  insert->kind = LogicalOperatorKind::Insert;
   insert->table = statement.table;
   insert->children.push_back(std::move(values));
   return ok_result<LogicalPlanPtr>(std::move(insert));
@@ -145,7 +139,6 @@ plan_create_table(const BoundCreateTableStatement &statement) {
   }
 
   auto create = std::make_unique<LogicalCreateTable>();
-  create->kind = LogicalOperatorKind::CreateTable;
   create->request = statement.request;
   return ok_result<LogicalPlanPtr>(std::move(create));
 }

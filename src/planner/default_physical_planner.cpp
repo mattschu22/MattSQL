@@ -2,6 +2,7 @@
 
 #include "mattsql/binder/expression_utils.hpp"
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/planner/plan_utils.hpp"
 
 #include <memory>
 #include <string>
@@ -46,19 +47,9 @@ plan_children(const std::vector<LogicalPlanPtr> &children) {
   return ok_result(std::move(planned_children));
 }
 
-[[nodiscard]] Status require_child_count(const LogicalPlan &plan, std::size_t expected,
-                                         std::string_view operator_name) {
-  if (plan.children.size() != expected) {
-    return error_status(ErrorCode::PlanError,
-                        std::string(operator_name) + " has the wrong number of inputs");
-  }
-
-  return ok_status();
-}
-
 [[nodiscard]] Result<PhysicalPlanPtr>
 plan_create_table(const LogicalCreateTable &logical) {
-  const auto child_status = require_child_count(logical, 0, "CREATE TABLE");
+  const auto child_status = RequireLeaf(logical, "CREATE TABLE", ErrorCode::PlanError);
   if (!status_ok(child_status)) {
     return error_result<PhysicalPlanPtr>(child_status);
   }
@@ -72,14 +63,13 @@ plan_create_table(const LogicalCreateTable &logical) {
   }
 
   auto physical = std::make_unique<PhysicalCreateTable>();
-  physical->kind = PhysicalOperatorKind::CreateTable;
   physical->request = logical.request;
   physical->storage_method = TableStorageMethod::Heap;
   return ok_result<PhysicalPlanPtr>(std::move(physical));
 }
 
 [[nodiscard]] Result<PhysicalPlanPtr> plan_values(const LogicalValues &logical) {
-  const auto child_status = require_child_count(logical, 0, "VALUES");
+  const auto child_status = RequireLeaf(logical, "VALUES", ErrorCode::PlanError);
   if (!status_ok(child_status)) {
     return error_result<PhysicalPlanPtr>(child_status);
   }
@@ -90,14 +80,13 @@ plan_create_table(const LogicalCreateTable &logical) {
   }
 
   auto physical = std::make_unique<PhysicalValues>();
-  physical->kind = PhysicalOperatorKind::Values;
   physical->rows = std::move(*rows.value);
   physical->tuples = logical.tuples;
   return ok_result<PhysicalPlanPtr>(std::move(physical));
 }
 
 [[nodiscard]] Result<PhysicalPlanPtr> plan_seq_scan(const LogicalSeqScan &logical) {
-  const auto child_status = require_child_count(logical, 0, "SeqScan");
+  const auto child_status = RequireLeaf(logical, "SeqScan", ErrorCode::PlanError);
   if (!status_ok(child_status)) {
     return error_result<PhysicalPlanPtr>(child_status);
   }
@@ -107,14 +96,14 @@ plan_create_table(const LogicalCreateTable &logical) {
   }
 
   auto physical = std::make_unique<PhysicalSeqScan>();
-  physical->kind = PhysicalOperatorKind::SeqScan;
   physical->table = logical.table;
   physical->storage = make_table_storage_reference(logical.table);
   return ok_result<PhysicalPlanPtr>(std::move(physical));
 }
 
 [[nodiscard]] Result<PhysicalPlanPtr> plan_filter(const LogicalFilter &logical) {
-  const auto child_status = require_child_count(logical, 1, "Filter");
+  const auto child_status =
+      RequireChildCount(logical, 1, "Filter", ErrorCode::PlanError);
   if (!status_ok(child_status)) {
     return error_result<PhysicalPlanPtr>(child_status);
   }
@@ -138,7 +127,6 @@ plan_create_table(const LogicalCreateTable &logical) {
   }
 
   auto physical = std::make_unique<PhysicalFilter>();
-  physical->kind = PhysicalOperatorKind::Filter;
   physical->predicate = std::move(*predicate.value);
   physical->children = std::move(*children.value);
   return ok_result<PhysicalPlanPtr>(std::move(physical));
@@ -146,7 +134,8 @@ plan_create_table(const LogicalCreateTable &logical) {
 
 [[nodiscard]] Result<PhysicalPlanPtr>
 plan_projection(const LogicalProjection &logical) {
-  const auto child_status = require_child_count(logical, 1, "Projection");
+  const auto child_status =
+      RequireChildCount(logical, 1, "Projection", ErrorCode::PlanError);
   if (!status_ok(child_status)) {
     return error_result<PhysicalPlanPtr>(child_status);
   }
@@ -171,7 +160,6 @@ plan_projection(const LogicalProjection &logical) {
   }
 
   auto physical = std::make_unique<PhysicalProjection>();
-  physical->kind = PhysicalOperatorKind::Projection;
   physical->projections = std::move(*projections.value);
   physical->projection_names = logical.projection_names;
   physical->children = std::move(*children.value);
@@ -179,7 +167,8 @@ plan_projection(const LogicalProjection &logical) {
 }
 
 [[nodiscard]] Result<PhysicalPlanPtr> plan_insert(const LogicalInsert &logical) {
-  const auto child_status = require_child_count(logical, 1, "Insert");
+  const auto child_status =
+      RequireChildCount(logical, 1, "Insert", ErrorCode::PlanError);
   if (!status_ok(child_status)) {
     return error_result<PhysicalPlanPtr>(child_status);
   }
@@ -194,7 +183,6 @@ plan_projection(const LogicalProjection &logical) {
   }
 
   auto physical = std::make_unique<PhysicalInsert>();
-  physical->kind = PhysicalOperatorKind::Insert;
   physical->table = logical.table;
   physical->storage = make_table_storage_reference(logical.table);
   physical->children = std::move(*children.value);

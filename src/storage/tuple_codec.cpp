@@ -2,6 +2,7 @@
 
 #include "mattsql/common/result_utils.hpp"
 #include "mattsql/common/value_utils.hpp"
+#include "mattsql/storage/byte_io.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -14,21 +15,12 @@ namespace {
 
 enum class FieldTag : std::uint8_t { Null = 0, Integer = 1, Boolean = 2, Text = 3 };
 
-void append_byte(std::vector<std::byte> &bytes, std::uint8_t value) {
-  bytes.push_back(static_cast<std::byte>(value));
-}
-
 void append_u32(std::vector<std::byte> &bytes, std::uint32_t value) {
-  for (int shift = 0; shift < 32; shift += 8) {
-    append_byte(bytes, static_cast<std::uint8_t>((value >> shift) & 0xffU));
-  }
+  AppendLittleEndian(bytes, value);
 }
 
 void append_i64(std::vector<std::byte> &bytes, std::int64_t value) {
-  const auto encoded = static_cast<std::uint64_t>(value);
-  for (int shift = 0; shift < 64; shift += 8) {
-    append_byte(bytes, static_cast<std::uint8_t>((encoded >> shift) & 0xffU));
-  }
+  AppendLittleEndian(bytes, static_cast<std::uint64_t>(value));
 }
 
 [[nodiscard]] bool read_byte(ConstBufferView record, std::size_t &offset,
@@ -44,35 +36,14 @@ void append_i64(std::vector<std::byte> &bytes, std::int64_t value) {
 
 [[nodiscard]] bool read_u32(ConstBufferView record, std::size_t &offset,
                             std::uint32_t &value) {
-  if (record.bytes.size() - offset < sizeof(std::uint32_t)) {
-    return false;
-  }
-
-  value = 0;
-  for (int shift = 0; shift < 32; shift += 8) {
-    std::uint8_t byte = 0;
-    if (!read_byte(record, offset, byte)) {
-      return false;
-    }
-    value |= static_cast<std::uint32_t>(byte) << shift;
-  }
-
-  return true;
+  return ReadLittleEndian(record.bytes, offset, value);
 }
 
 [[nodiscard]] bool read_i64(ConstBufferView record, std::size_t &offset,
                             std::int64_t &value) {
-  if (record.bytes.size() - offset < sizeof(std::int64_t)) {
-    return false;
-  }
-
   std::uint64_t encoded = 0;
-  for (int shift = 0; shift < 64; shift += 8) {
-    std::uint8_t byte = 0;
-    if (!read_byte(record, offset, byte)) {
-      return false;
-    }
-    encoded |= static_cast<std::uint64_t>(byte) << shift;
+  if (!ReadLittleEndian(record.bytes, offset, encoded)) {
+    return false;
   }
 
   value = static_cast<std::int64_t>(encoded);
@@ -93,12 +64,17 @@ Result<Tuple> BinaryTupleCodec::Encode(const TableSchema &schema,
     const auto &column = schema.columns[index];
     const auto &value = values[index];
 
+    if (column.type == SqlType::Null) {
+      return error_result<Tuple>(ErrorCode::InvalidArgument,
+                                 "storage column type cannot be Null");
+    }
+
     if (std::holds_alternative<NullValue>(value)) {
       if (!column.nullable) {
         return error_result<Tuple>(ErrorCode::TypeMismatch,
                                    "column cannot be NULL: " + column.name);
       }
-      append_byte(tuple.bytes, static_cast<std::uint8_t>(FieldTag::Null));
+      AppendByte(tuple.bytes, static_cast<std::uint8_t>(FieldTag::Null));
       continue;
     }
 
@@ -109,7 +85,7 @@ Result<Tuple> BinaryTupleCodec::Encode(const TableSchema &schema,
 
     switch (column.type) {
     case SqlType::Integer:
-      append_byte(tuple.bytes, static_cast<std::uint8_t>(FieldTag::Integer));
+      AppendByte(tuple.bytes, static_cast<std::uint8_t>(FieldTag::Integer));
       append_i64(tuple.bytes, std::get<std::int64_t>(value));
       break;
     case SqlType::Text: {
@@ -118,20 +94,19 @@ Result<Tuple> BinaryTupleCodec::Encode(const TableSchema &schema,
         return error_result<Tuple>(ErrorCode::InvalidArgument,
                                    "text value is too large");
       }
-      append_byte(tuple.bytes, static_cast<std::uint8_t>(FieldTag::Text));
+      AppendByte(tuple.bytes, static_cast<std::uint8_t>(FieldTag::Text));
       append_u32(tuple.bytes, static_cast<std::uint32_t>(text.size()));
       for (const char character : text) {
-        append_byte(tuple.bytes, static_cast<std::uint8_t>(character));
+        AppendByte(tuple.bytes, static_cast<std::uint8_t>(character));
       }
       break;
     }
     case SqlType::Boolean:
-      append_byte(tuple.bytes, static_cast<std::uint8_t>(FieldTag::Boolean));
-      append_byte(tuple.bytes, std::get<bool>(value) ? 1U : 0U);
+      AppendByte(tuple.bytes, static_cast<std::uint8_t>(FieldTag::Boolean));
+      AppendByte(tuple.bytes, std::get<bool>(value) ? 1U : 0U);
       break;
     case SqlType::Null:
-      return error_result<Tuple>(ErrorCode::InvalidArgument,
-                                 "storage column type cannot be Null");
+      break;
     }
   }
 
@@ -145,6 +120,11 @@ Result<std::vector<Value>> BinaryTupleCodec::Decode(const TableSchema &schema,
 
   std::size_t offset = 0;
   for (const auto &column : schema.columns) {
+    if (column.type == SqlType::Null) {
+      return error_result<std::vector<Value>>(ErrorCode::Corruption,
+                                              "storage column type cannot be Null");
+    }
+
     std::uint8_t tag_byte = 0;
     if (!read_byte(record, offset, tag_byte)) {
       return error_result<std::vector<Value>>(ErrorCode::Corruption,
@@ -208,8 +188,7 @@ Result<std::vector<Value>> BinaryTupleCodec::Decode(const TableSchema &schema,
       break;
     }
     case SqlType::Null:
-      return error_result<std::vector<Value>>(ErrorCode::Corruption,
-                                              "storage column type cannot be Null");
+      break;
     }
   }
 

@@ -1,52 +1,19 @@
 #include "mattsql/binder/default_binder.hpp"
 #include "mattsql/catalog/in_memory_catalog.hpp"
 #include "mattsql/common/result_utils.hpp"
-#include "mattsql/lexer/lexer.hpp"
-#include "mattsql/parser/parser.hpp"
 
+#include "sql_pipeline_test_utils.hpp"
 #include "test_framework.hpp"
 
-#include <cstdint>
 #include <memory>
 #include <string>
 #include <variant>
 
 namespace {
 
-mattsql::StatementPtr parse_statement(const std::string &sql) {
-  mattsql::Lexer lexer(sql);
-  mattsql::Parser parser(lexer.Tokenize());
-  return parser.ParseStatement();
-}
-
-template <typename T, typename Base> const T *as(const Base *node) {
-  const auto *value = dynamic_cast<const T *>(node);
-  EXPECT_TRUE(value != nullptr);
-  return value;
-}
-
-mattsql::CreateTableRequest users_request() {
-  mattsql::CreateTableRequest request;
-  request.name = "users";
-  request.schema.columns.push_back({"id", mattsql::SqlType::Integer, false});
-  request.schema.columns.push_back({"name", mattsql::SqlType::Text});
-  request.schema.columns.push_back({"active", mattsql::SqlType::Boolean, false});
-  return request;
-}
-
-mattsql::InMemoryCatalog make_catalog() {
-  mattsql::InMemoryCatalog catalog;
-  const auto created = catalog.CreateTable(users_request());
-  EXPECT_TRUE(mattsql::status_ok(created.status));
-  return catalog;
-}
-
-mattsql::Result<mattsql::BoundStatementPtr> bind_sql(const std::string &sql,
-                                                     mattsql::Catalog &catalog) {
-  const auto statement = parse_statement(sql);
-  mattsql::DefaultBinder binder;
-  return binder.Bind(*statement, catalog);
-}
+using test::as;
+using test::bind_sql;
+using test::make_catalog;
 
 } // namespace
 
@@ -59,7 +26,7 @@ TEST_CASE(binder_binds_create_table_request) {
 
   EXPECT_TRUE(mattsql::status_ok(result.status));
   const auto *create = as<mattsql::BoundCreateTableStatement>(result.value->get());
-  EXPECT_TRUE(create->kind == mattsql::BoundStatementKind::CreateTable);
+  EXPECT_TRUE(create->Kind() == mattsql::BoundStatementKind::CreateTable);
   EXPECT_EQ(create->request.name, std::string("projects"));
   EXPECT_EQ(create->request.schema.columns.size(), 3U);
   EXPECT_EQ(create->request.schema.columns[0].name, std::string("id"));
@@ -79,7 +46,7 @@ TEST_CASE(binder_binds_insert_values_against_table_schema) {
 
   EXPECT_TRUE(mattsql::status_ok(result.status));
   const auto *insert = as<mattsql::BoundInsertStatement>(result.value->get());
-  EXPECT_TRUE(insert->kind == mattsql::BoundStatementKind::Insert);
+  EXPECT_TRUE(insert->Kind() == mattsql::BoundStatementKind::Insert);
   EXPECT_EQ(insert->table.id, mattsql::TableId{1});
   EXPECT_EQ(insert->values.size(), 3U);
 
@@ -127,7 +94,7 @@ TEST_CASE(binder_binds_select_columns_and_where_predicate) {
 
   EXPECT_TRUE(mattsql::status_ok(result.status));
   const auto *select = as<mattsql::BoundSelectStatement>(result.value->get());
-  EXPECT_TRUE(select->kind == mattsql::BoundStatementKind::Select);
+  EXPECT_TRUE(select->Kind() == mattsql::BoundStatementKind::Select);
   EXPECT_EQ(select->table.name, std::string("users"));
   EXPECT_EQ(select->projections.size(), 2U);
 
@@ -207,6 +174,13 @@ TEST_CASE(binder_rejects_invalid_create_table_statements) {
   empty_column_name.columns.push_back({"", mattsql::TypeName::Int});
   EXPECT_TRUE(binder.Bind(empty_column_name, catalog).status.code ==
               mattsql::ErrorCode::BindError);
+
+  mattsql::CreateTableStatement invalid_type;
+  invalid_type.table_name = "bad_type";
+  invalid_type.columns.push_back(
+      {"id", static_cast<mattsql::TypeName>(999)});
+  EXPECT_TRUE(binder.Bind(invalid_type, catalog).status.code ==
+              mattsql::ErrorCode::BindError);
 }
 
 /// Verifies invalid INSERT statements reject missing tables and bad values.
@@ -229,6 +203,15 @@ TEST_CASE(binder_rejects_invalid_insert_statements) {
   EXPECT_TRUE(
       bind_sql("INSERT INTO users VALUES (1, 'Ada', 2);", catalog).status.code ==
       mattsql::ErrorCode::TypeMismatch);
+
+  mattsql::InsertStatement null_value;
+  null_value.table_name = "users";
+  null_value.values.push_back(nullptr);
+  null_value.values.push_back(std::make_unique<mattsql::StringLiteral>("Ada"));
+  null_value.values.push_back(std::make_unique<mattsql::BooleanLiteral>(true));
+  mattsql::DefaultBinder binder;
+  EXPECT_TRUE(binder.Bind(null_value, catalog).status.code ==
+              mattsql::ErrorCode::BindError);
 }
 
 /// Verifies invalid SELECT statements reject bad names and scalar type errors.
@@ -255,4 +238,28 @@ TEST_CASE(binder_rejects_invalid_select_statements) {
               mattsql::ErrorCode::TypeMismatch);
   EXPECT_TRUE(bind_sql("SELECT id FROM users WHERE id < NULL;", catalog).status.code ==
               mattsql::ErrorCode::TypeMismatch);
+
+  mattsql::DefaultBinder binder;
+  mattsql::SelectStatement null_projection;
+  null_projection.projections.push_back({});
+  EXPECT_TRUE(binder.Bind(null_projection, catalog).status.code ==
+              mattsql::ErrorCode::BindError);
+
+  mattsql::SelectStatement malformed_unary;
+  mattsql::SelectProjection unary_projection;
+  unary_projection.expression =
+      std::make_unique<mattsql::UnaryExpression>(mattsql::UnaryOperator::Minus,
+                                                 nullptr);
+  malformed_unary.projections.push_back(std::move(unary_projection));
+  EXPECT_TRUE(binder.Bind(malformed_unary, catalog).status.code ==
+              mattsql::ErrorCode::BindError);
+
+  mattsql::SelectStatement malformed_binary;
+  mattsql::SelectProjection binary_projection;
+  binary_projection.expression = std::make_unique<mattsql::BinaryExpression>(
+      nullptr, mattsql::BinaryOperator::Add,
+      std::make_unique<mattsql::IntegerLiteral>(1));
+  malformed_binary.projections.push_back(std::move(binary_projection));
+  EXPECT_TRUE(binder.Bind(malformed_binary, catalog).status.code ==
+              mattsql::ErrorCode::BindError);
 }

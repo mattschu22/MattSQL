@@ -1,7 +1,6 @@
 #include "mattsql/common/query_result.hpp"
 #include "mattsql/common/result_utils.hpp"
 #include "mattsql/common/value_utils.hpp"
-#include "mattsql/lexer/lexer.hpp"
 #include "mattsql/sql_engine.hpp"
 
 #include <cstdint>
@@ -67,24 +66,73 @@ struct Session {
   return true;
 }
 
-// Parser currently accepts one statement at a time, so the CLI uses lexer token
-// ranges to split scripts on statement-terminating semicolons.
-[[nodiscard]] bool extract_statement(std::string &buffer, std::string &statement) {
-  try {
-    mattsql::Lexer lexer(buffer);
-    for (const auto &token : lexer.Tokenize()) {
-      if (token.type == mattsql::TokenType::Semicolon) {
-        const auto end = token.range.end.offset;
-        statement = buffer.substr(0, end);
-        buffer.erase(0, end);
-        return true;
+[[nodiscard]] std::string_view::size_type
+find_statement_terminator(std::string_view buffer) {
+  bool in_string = false;
+  bool in_line_comment = false;
+  bool in_block_comment = false;
+
+  for (std::string_view::size_type index = 0; index < buffer.size(); ++index) {
+    const auto character = buffer[index];
+    const auto next = index + 1 < buffer.size() ? buffer[index + 1] : '\0';
+
+    if (in_string) {
+      if (character == '\'' && next == '\'') {
+        ++index;
+      } else if (character == '\'') {
+        in_string = false;
       }
+      continue;
     }
-  } catch (const std::exception &) {
+
+    if (in_line_comment) {
+      if (character == '\n' || character == '\r') {
+        in_line_comment = false;
+      }
+      continue;
+    }
+
+    if (in_block_comment) {
+      if (character == '*' && next == '/') {
+        in_block_comment = false;
+        ++index;
+      }
+      continue;
+    }
+
+    if (character == '\'') {
+      in_string = true;
+      continue;
+    }
+    if (character == '-' && next == '-') {
+      in_line_comment = true;
+      ++index;
+      continue;
+    }
+    if (character == '/' && next == '*') {
+      in_block_comment = true;
+      ++index;
+      continue;
+    }
+    if (character == ';') {
+      return index + 1;
+    }
+  }
+
+  return std::string_view::npos;
+}
+
+// Parser currently accepts one statement at a time, so the CLI splits scripts on
+// statement-terminating semicolons before parsing each statement independently.
+[[nodiscard]] bool extract_statement(std::string &buffer, std::string &statement) {
+  const auto end = find_statement_terminator(buffer);
+  if (end == std::string_view::npos) {
     return false;
   }
 
-  return false;
+  statement = buffer.substr(0, end);
+  buffer.erase(0, end);
+  return true;
 }
 
 void print_result(const mattsql::QueryResult &result) {

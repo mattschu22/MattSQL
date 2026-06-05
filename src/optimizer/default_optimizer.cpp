@@ -36,7 +36,10 @@ namespace {
     return std::nullopt;
   case UnaryOperator::Minus:
     if (const auto *integer = std::get_if<std::int64_t>(&operand)) {
-      return -*integer;
+      auto folded = CheckedIntegerNegate(*integer, "unary minus");
+      if (folded.ok()) {
+        return folded.Value();
+      }
     }
     return std::nullopt;
   case UnaryOperator::Not:
@@ -58,17 +61,38 @@ namespace {
   }
 
   switch (op) {
-  case BinaryOperator::Add:
-    return *left_integer + *right_integer;
-  case BinaryOperator::Subtract:
-    return *left_integer - *right_integer;
-  case BinaryOperator::Multiply:
-    return *left_integer * *right_integer;
-  case BinaryOperator::Divide:
-    if (*right_integer == 0) {
-      return std::nullopt;
+  case BinaryOperator::Add: {
+    auto result =
+        CheckedIntegerAdd(*left_integer, *right_integer, "integer addition");
+    if (result.ok()) {
+      return result.Value();
     }
-    return *left_integer / *right_integer;
+    return std::nullopt;
+  }
+  case BinaryOperator::Subtract: {
+    auto result = CheckedIntegerSubtract(*left_integer, *right_integer,
+                                         "integer subtraction");
+    if (result.ok()) {
+      return result.Value();
+    }
+    return std::nullopt;
+  }
+  case BinaryOperator::Multiply: {
+    auto result = CheckedIntegerMultiply(*left_integer, *right_integer,
+                                         "integer multiplication");
+    if (result.ok()) {
+      return result.Value();
+    }
+    return std::nullopt;
+  }
+  case BinaryOperator::Divide: {
+    auto result =
+        CheckedIntegerDivide(*left_integer, *right_integer, "integer division");
+    if (result.ok()) {
+      return result.Value();
+    }
+    return std::nullopt;
+  }
   default:
     return std::nullopt;
   }
@@ -181,7 +205,14 @@ fold_current_expression(BoundExpressionPtr expression) {
     return ok_result(std::move(expression));
   }
 
-  return ok_result(std::move(expression));
+  if (dynamic_cast<BoundLiteralExpression *>(expression.get()) != nullptr ||
+      dynamic_cast<BoundColumnExpression *>(expression.get()) != nullptr ||
+      dynamic_cast<BoundStarExpression *>(expression.get()) != nullptr) {
+    return ok_result(std::move(expression));
+  }
+
+  return error_result<BoundExpressionPtr>(ErrorCode::PlanError,
+                                          "unsupported bound expression");
 }
 
 [[nodiscard]] Result<BoundExpressionPtr>
@@ -197,28 +228,28 @@ fold_expression(BoundExpressionPtr expression) {
 
   for (auto &child : plan->children) {
     auto folded = fold_plan(std::move(child));
-    if (!status_ok(folded.status)) {
+    if (!folded.ok()) {
       return folded;
     }
-    child = std::move(*folded.value);
+    child = std::move(folded).TakeValue();
   }
 
   if (auto *filter = dynamic_cast<LogicalFilter *>(plan.get())) {
     auto predicate = fold_expression(std::move(filter->predicate));
-    if (!status_ok(predicate.status)) {
+    if (!predicate.ok()) {
       return error_result<LogicalPlanPtr>(std::move(predicate.status));
     }
-    filter->predicate = std::move(*predicate.value);
+    filter->predicate = std::move(predicate).TakeValue();
     return ok_result(std::move(plan));
   }
 
   if (auto *projection = dynamic_cast<LogicalProjection *>(plan.get())) {
     for (auto &projection_expression : projection->projections) {
       auto folded = fold_expression(std::move(projection_expression));
-      if (!status_ok(folded.status)) {
+      if (!folded.ok()) {
         return error_result<LogicalPlanPtr>(std::move(folded.status));
       }
-      projection_expression = std::move(*folded.value);
+      projection_expression = std::move(folded).TakeValue();
     }
     return ok_result(std::move(plan));
   }
@@ -227,16 +258,23 @@ fold_expression(BoundExpressionPtr expression) {
     for (auto &row : values->rows) {
       for (auto &value_expression : row) {
         auto folded = fold_expression(std::move(value_expression));
-        if (!status_ok(folded.status)) {
+        if (!folded.ok()) {
           return error_result<LogicalPlanPtr>(std::move(folded.status));
         }
-        value_expression = std::move(*folded.value);
+        value_expression = std::move(folded).TakeValue();
       }
     }
     return ok_result(std::move(plan));
   }
 
-  return ok_result(std::move(plan));
+  if (dynamic_cast<LogicalCreateTable *>(plan.get()) != nullptr ||
+      dynamic_cast<LogicalInsert *>(plan.get()) != nullptr ||
+      dynamic_cast<LogicalSeqScan *>(plan.get()) != nullptr) {
+    return ok_result(std::move(plan));
+  }
+
+  return error_result<LogicalPlanPtr>(ErrorCode::PlanError,
+                                      "unsupported logical plan node");
 }
 
 [[nodiscard]] Result<LogicalPlanPtr> remove_constant_filters(LogicalPlanPtr plan) {
@@ -247,15 +285,19 @@ fold_expression(BoundExpressionPtr expression) {
 
   for (auto &child : plan->children) {
     auto optimized = remove_constant_filters(std::move(child));
-    if (!status_ok(optimized.status)) {
+    if (!optimized.ok()) {
       return optimized;
     }
-    child = std::move(*optimized.value);
+    child = std::move(optimized).TakeValue();
   }
 
+  if (plan->Kind() != LogicalOperatorKind::Filter) {
+    return ok_result(std::move(plan));
+  }
   auto *filter = dynamic_cast<LogicalFilter *>(plan.get());
   if (filter == nullptr) {
-    return ok_result(std::move(plan));
+    return error_result<LogicalPlanPtr>(ErrorCode::PlanError,
+                                        "unsupported logical plan node");
   }
 
   if (filter->predicate == nullptr) {
@@ -277,7 +319,6 @@ fold_expression(BoundExpressionPtr expression) {
   }
 
   auto values = std::make_unique<LogicalValues>();
-  values->kind = LogicalOperatorKind::Values;
   return ok_result<LogicalPlanPtr>(std::move(values));
 }
 
@@ -336,16 +377,16 @@ Result<LogicalPlanPtr> DefaultOptimizer::Optimize(LogicalPlanPtr plan) {
 
   for (const auto &rule : rules_) {
     auto optimized = rule->Apply(std::move(plan));
-    if (!status_ok(optimized.status)) {
+    if (!optimized.ok()) {
       return optimized;
     }
-    if (!optimized.value.has_value() || *optimized.value == nullptr) {
+    if (!optimized.has_value() || optimized.Value() == nullptr) {
       return error_result<LogicalPlanPtr>(
           ErrorCode::Internal,
           "optimizer rule returned success without a logical plan: " +
               std::string(rule->Name()));
     }
-    plan = std::move(*optimized.value);
+    plan = std::move(optimized).TakeValue();
   }
 
   return ok_result(std::move(plan));

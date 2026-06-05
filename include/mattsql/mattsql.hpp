@@ -25,6 +25,7 @@
 #include "mattsql/planner/default_physical_planner.hpp"
 #include "mattsql/planner/planner.hpp"
 #include "mattsql/runtime/c_abi_platform_runtime.hpp"
+#include "mattsql/runtime/c_abi_runtime_provider.hpp"
 #include "mattsql/runtime/hosted_platform_runtime.hpp"
 #include "mattsql/runtime/platform.hpp"
 #include "mattsql/sql_engine.hpp"

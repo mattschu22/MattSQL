@@ -429,6 +429,13 @@ TEST_CASE(hosted_catalog_api_rejects_invalid_operations) {
   EXPECT_TRUE(mattsql::status_ok(api.StoreTable("users", table).status));
   EXPECT_TRUE(api.StoreTable("users", table).status.code ==
               mattsql::ErrorCode::AlreadyExists);
+
+  auto duplicate_id = table;
+  duplicate_id.name = "projects";
+  EXPECT_TRUE(api.StoreTable("projects", duplicate_id).status.code ==
+              mattsql::ErrorCode::AlreadyExists);
+  EXPECT_TRUE(api.LoadTable("projects").status.code == mattsql::ErrorCode::NotFound);
+
   EXPECT_TRUE(api.LoadTable("missing").status.code == mattsql::ErrorCode::NotFound);
   EXPECT_TRUE(api.LoadTable(mattsql::TableId{99}).status.code ==
               mattsql::ErrorCode::NotFound);
@@ -442,6 +449,23 @@ TEST_CASE(hosted_catalog_api_rejects_invalid_operations) {
       mattsql::status_ok(api.StoreIndex("users", "users_id_idx", index).status));
   EXPECT_TRUE(api.StoreIndex("users", "users_id_idx", index).status.code ==
               mattsql::ErrorCode::AlreadyExists);
+
+  mattsql::IndexInfo duplicate_index_id = index;
+  duplicate_index_id.name = "users_name_idx";
+  duplicate_index_id.schema.name = "users_name_idx";
+  EXPECT_TRUE(api.StoreIndex("users", "users_name_idx", duplicate_index_id)
+                  .status.code == mattsql::ErrorCode::AlreadyExists);
+
+  mattsql::IndexInfo wrong_table_index = index;
+  wrong_table_index.id = 2;
+  wrong_table_index.name = "wrong_table_idx";
+  wrong_table_index.table_id = 99;
+  wrong_table_index.schema.name = "wrong_table_idx";
+  EXPECT_TRUE(api.StoreIndex("users", "wrong_table_idx", wrong_table_index)
+                  .status.code == mattsql::ErrorCode::InvalidArgument);
+  EXPECT_TRUE(api.LoadIndex("users", "wrong_table_idx").status.code ==
+              mattsql::ErrorCode::NotFound);
+
   EXPECT_TRUE(api.StoreIndex("missing", "idx", index).status.code ==
               mattsql::ErrorCode::NotFound);
   EXPECT_TRUE(api.LoadIndex("users", "missing").status.code ==

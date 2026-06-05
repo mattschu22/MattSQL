@@ -4,6 +4,7 @@
 #include "mattsql/common/types.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -60,6 +61,87 @@ namespace mattsql {
 
   return error_result<bool>(ErrorCode::TypeMismatch,
                             std::string(context) + " requires BOOLEAN operands");
+}
+
+[[nodiscard]] inline Result<std::int64_t>
+CheckedIntegerNegate(std::int64_t value, std::string_view context) {
+  if (value == std::numeric_limits<std::int64_t>::min()) {
+    return error_result<std::int64_t>(ErrorCode::ExecutionError,
+                                      std::string(context) + " overflow");
+  }
+  return ok_result<std::int64_t>(-value);
+}
+
+[[nodiscard]] inline Result<std::int64_t>
+CheckedIntegerAdd(std::int64_t left, std::int64_t right, std::string_view context) {
+  constexpr auto kMin = std::numeric_limits<std::int64_t>::min();
+  constexpr auto kMax = std::numeric_limits<std::int64_t>::max();
+  if ((right > 0 && left > kMax - right) ||
+      (right < 0 && left < kMin - right)) {
+    return error_result<std::int64_t>(ErrorCode::ExecutionError,
+                                      std::string(context) + " overflow");
+  }
+  return ok_result<std::int64_t>(left + right);
+}
+
+[[nodiscard]] inline Result<std::int64_t>
+CheckedIntegerSubtract(std::int64_t left, std::int64_t right,
+                       std::string_view context) {
+  constexpr auto kMin = std::numeric_limits<std::int64_t>::min();
+  constexpr auto kMax = std::numeric_limits<std::int64_t>::max();
+  if ((right > 0 && left < kMin + right) ||
+      (right < 0 && left > kMax + right)) {
+    return error_result<std::int64_t>(ErrorCode::ExecutionError,
+                                      std::string(context) + " overflow");
+  }
+  return ok_result<std::int64_t>(left - right);
+}
+
+[[nodiscard]] inline Result<std::int64_t>
+CheckedIntegerMultiply(std::int64_t left, std::int64_t right,
+                       std::string_view context) {
+  constexpr auto kMin = std::numeric_limits<std::int64_t>::min();
+  constexpr auto kMax = std::numeric_limits<std::int64_t>::max();
+
+  if (left == 0 || right == 0) {
+    return ok_result<std::int64_t>(0);
+  }
+  if (left == -1) {
+    return CheckedIntegerNegate(right, context);
+  }
+  if (right == -1) {
+    return CheckedIntegerNegate(left, context);
+  }
+
+  if (left > 0) {
+    if ((right > 0 && left > kMax / right) ||
+        (right < 0 && right < kMin / left)) {
+      return error_result<std::int64_t>(ErrorCode::ExecutionError,
+                                        std::string(context) + " overflow");
+    }
+  } else {
+    if ((right > 0 && left < kMin / right) ||
+        (right < 0 && left < kMax / right)) {
+      return error_result<std::int64_t>(ErrorCode::ExecutionError,
+                                        std::string(context) + " overflow");
+    }
+  }
+
+  return ok_result<std::int64_t>(left * right);
+}
+
+[[nodiscard]] inline Result<std::int64_t>
+CheckedIntegerDivide(std::int64_t left, std::int64_t right,
+                     std::string_view context) {
+  if (right == 0) {
+    return error_result<std::int64_t>(ErrorCode::ExecutionError,
+                                      "division by zero");
+  }
+  if (left == std::numeric_limits<std::int64_t>::min() && right == -1) {
+    return error_result<std::int64_t>(ErrorCode::ExecutionError,
+                                      std::string(context) + " overflow");
+  }
+  return ok_result<std::int64_t>(left / right);
 }
 
 [[nodiscard]] inline Result<int> CompareValues(const Value &left, const Value &right) {

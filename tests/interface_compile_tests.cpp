@@ -28,6 +28,8 @@ TEST_CASE(sql_engine_interfaces_are_self_contained) {
       std::is_base_of_v<mattsql::PlatformRuntime, mattsql::HostedPlatformRuntime>);
   static_assert(
       std::is_base_of_v<mattsql::PlatformRuntime, mattsql::CAbiPlatformRuntime>);
+  static_assert(
+      std::is_constructible_v<mattsql::CAbiRuntimeProvider, mattsql::PlatformRuntime &>);
   static_assert(std::is_base_of_v<mattsql::TupleCodec, mattsql::BinaryTupleCodec>);
   static_assert(std::variant_size_v<mattsql::Value> == 4);
   static_assert(std::is_default_constructible_v<mattsql::TupleBatch>);
