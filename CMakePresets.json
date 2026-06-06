@@ -20,6 +20,18 @@
         "CMAKE_BUILD_TYPE": "Release",
         "BUILD_TESTING": "ON"
       }
+    },
+    {
+      "name": "profile",
+      "displayName": "Profile",
+      "description": "Optimized build with debug symbols and profiler-friendly frame pointers.",
+      "binaryDir": "${sourceDir}/build/profile",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "BUILD_TESTING": "ON",
+        "MATTSQL_BUILD_BENCHMARKS": "ON",
+        "MATTSQL_ENABLE_FRAME_POINTERS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -30,6 +42,10 @@
     {
       "name": "release",
       "configurePreset": "release"
+    },
+    {
+      "name": "profile",
+      "configurePreset": "profile"
     }
   ],
   "testPresets": [
@@ -43,6 +59,13 @@
     {
       "name": "release",
       "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "profile",
+      "configurePreset": "profile",
       "output": {
         "outputOnFailure": true
       }

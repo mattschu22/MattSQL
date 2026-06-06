@@ -8,6 +8,8 @@ project(
 )
 
 option(MATTSQL_ENABLE_WARNINGS "Enable strict compiler warnings" ON)
+option(MATTSQL_ENABLE_FRAME_POINTERS "Keep frame pointers for profiler call stacks" ON)
+option(MATTSQL_BUILD_BENCHMARKS "Build MattSQL benchmark and performance test targets" ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,6 +26,19 @@ function(mattsql_apply_warnings target)
     target_compile_options(${target} PRIVATE /W4 /permissive-)
   else()
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wconversion)
+  endif()
+endfunction()
+
+# Keeps call stacks usable for sampling profilers such as Instruments and perf.
+function(mattsql_apply_profiler_options target)
+  if(NOT MATTSQL_ENABLE_FRAME_POINTERS)
+    return()
+  endif()
+
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /Oy-)
+  else()
+    target_compile_options(${target} PRIVATE -fno-omit-frame-pointer)
   endif()
 endfunction()
 
@@ -62,10 +77,12 @@ target_include_directories(
 )
 target_compile_features(mattsql_core PUBLIC cxx_std_20)
 mattsql_apply_warnings(mattsql_core)
+mattsql_apply_profiler_options(mattsql_core)
 
 add_executable(mattsql src/main.cpp)
 target_link_libraries(mattsql PRIVATE MattSQL::core)
 mattsql_apply_warnings(mattsql)
+mattsql_apply_profiler_options(mattsql)
 
 include(CTest)
 
@@ -104,6 +121,7 @@ if(BUILD_TESTING)
       MATTSQL_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
   )
   mattsql_apply_warnings(mattsql_tests)
+  mattsql_apply_profiler_options(mattsql_tests)
 
   add_test(NAME mattsql.tests COMMAND mattsql_tests)
   add_test(
@@ -130,6 +148,118 @@ if(BUILD_TESTING)
         -o
         ${CMAKE_CURRENT_BINARY_DIR}/mattsql_abi_runtime_layout.rmeta
         ${PROJECT_SOURCE_DIR}/tests/rust/abi_runtime_layout.rs
+    )
+
+    set(
+      MATTSQL_RUST_ABI_PROVIDER_SMOKE_LIB
+      "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}mattsql_rust_abi_provider_smoke${CMAKE_STATIC_LIBRARY_SUFFIX}"
+    )
+    add_custom_command(
+      OUTPUT ${MATTSQL_RUST_ABI_PROVIDER_SMOKE_LIB}
+      COMMAND
+        ${MATTSQL_RUSTC}
+        --edition=2021
+        --crate-type
+        staticlib
+        -C
+        panic=abort
+        -o
+        ${MATTSQL_RUST_ABI_PROVIDER_SMOKE_LIB}
+        ${PROJECT_SOURCE_DIR}/tests/rust/abi_provider_smoke.rs
+      DEPENDS
+        ${PROJECT_SOURCE_DIR}/tests/rust/abi_provider_smoke.rs
+        ${PROJECT_SOURCE_DIR}/tests/rust/abi_runtime_layout.rs
+        ${PROJECT_SOURCE_DIR}/tests/rust/abi_runtime_types.rs
+      VERBATIM
+    )
+    add_custom_target(
+      mattsql_rust_abi_provider_smoke_lib
+      DEPENDS ${MATTSQL_RUST_ABI_PROVIDER_SMOKE_LIB}
+    )
+
+    add_executable(
+      mattsql_rust_abi_provider_smoke_tests
+      tests/rust_abi_provider_smoke_tests.cpp
+    )
+    add_dependencies(
+      mattsql_rust_abi_provider_smoke_tests
+      mattsql_rust_abi_provider_smoke_lib
+    )
+    target_link_libraries(
+      mattsql_rust_abi_provider_smoke_tests
+      PRIVATE
+        MattSQL::core
+        ${MATTSQL_RUST_ABI_PROVIDER_SMOKE_LIB}
+    )
+    mattsql_apply_warnings(mattsql_rust_abi_provider_smoke_tests)
+    mattsql_apply_profiler_options(mattsql_rust_abi_provider_smoke_tests)
+    add_test(
+      NAME mattsql.rust_abi_provider_smoke
+      COMMAND mattsql_rust_abi_provider_smoke_tests
+    )
+  endif()
+endif()
+
+if(MATTSQL_BUILD_BENCHMARKS)
+  add_executable(mattsql_benchmarks benchmarks/mattsql_benchmarks.cpp)
+  target_link_libraries(mattsql_benchmarks PRIVATE MattSQL::core)
+  target_compile_definitions(
+    mattsql_benchmarks
+    PRIVATE
+      MATTSQL_BENCHMARK_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+  )
+  mattsql_apply_warnings(mattsql_benchmarks)
+  mattsql_apply_profiler_options(mattsql_benchmarks)
+
+  if(BUILD_TESTING AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_test(
+      NAME mattsql.performance
+      COMMAND
+        mattsql_benchmarks
+        --check-baseline
+        ${PROJECT_SOURCE_DIR}/benchmarks/baseline.tsv
+        --quiet
+    )
+    set_tests_properties(mattsql.performance PROPERTIES LABELS performance)
+  endif()
+
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_custom_target(
+      mattsql_performance_report
+      COMMAND
+        ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/benchmarks/perf_visualize.py
+        --benchmark
+        $<TARGET_FILE:mattsql_benchmarks>
+        --baseline
+        ${PROJECT_SOURCE_DIR}/benchmarks/baseline.tsv
+        --output-dir
+        ${CMAKE_CURRENT_BINARY_DIR}/performance-report
+        --history
+        ${CMAKE_CURRENT_BINARY_DIR}/performance-history.jsonl
+      DEPENDS mattsql_benchmarks
+      VERBATIM
+    )
+
+    add_custom_target(
+      mattsql_perfetto_traces
+      COMMAND
+        ${Python3_EXECUTABLE}
+        ${PROJECT_SOURCE_DIR}/benchmarks/profile_artifacts.py
+        --benchmark
+        $<TARGET_FILE:mattsql_benchmarks>
+        --output-dir
+        ${CMAKE_CURRENT_BINARY_DIR}/performance-artifacts
+        --filters
+        frontend
+        engine_select
+        tuple_codec
+        page_heap
+        --trace-iterations
+        1
+      DEPENDS mattsql_benchmarks
+      VERBATIM
     )
   endif()
 endif()

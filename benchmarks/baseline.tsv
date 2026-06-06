@@ -1,0 +1,16 @@
+# MattSQL performance baseline v1.
+# Columns:
+#   benchmark_name baseline_median_ns_per_iteration max_regression_ratio
+#
+# Baselines are intentionally conservative because wall-clock performance varies
+# across developer laptops, CI hosts, and VM environments. Update these numbers
+# from a profile build on a stable runner when MattSQL gets a dedicated perf host.
+frontend_parse_corpus 5084 20.0
+frontend_bind_plan_optimize_corpus 53042 20.0
+engine_select_scan_projection_1024 1773625 20.0
+engine_insert_values_128 535834 20.0
+tuple_codec_encode_decode_256 75584 20.0
+slotted_page_insert_read_delete_80 2125 20.0
+page_heap_insert_scan_256 22625 20.0
+runtime_page_alloc_time_64 3833 20.0
+sql_logic_corpus_96x20 1644375 20.0

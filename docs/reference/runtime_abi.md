@@ -72,6 +72,14 @@ Version 1 is kernel-ready but MVP-scoped. It is intended to support the first
 Rust kernel runtime boundary without committing SQL, scheduler, filesystem, or
 network APIs to the C ABI.
 
+The version-1 working set is frozen as of June 6, 2026. The frozen surface is:
+
+- `include/mattsql/abi/runtime.h`
+- the C++ consumer adapter from `mattsql_abi_runtime_v1` to `PlatformRuntime`
+- the C++ provider adapter from `PlatformRuntime` to `mattsql_abi_runtime_v1`
+- the Rust `repr(C)` mirror used by layout and provider-smoke tests
+- the callback set listed in this document
+
 Once Rust kernel code consumes a versioned ABI table, that table is frozen:
 
 - Existing field order, field size, alignment, callback signatures, constant
@@ -100,6 +108,11 @@ actually implement.
 Older adapters should remain available until no supported kernel or provider
 depends on them. Any ABI change must update the C header, adapters, C++ tests,
 Rust layout mirror, and this document in the same patch.
+
+After the version-1 working set freeze, edits to version 1 are limited to
+contract-preserving bug fixes, additional negative tests, and documentation that
+clarifies existing behavior. New callbacks, new fields, changed status meanings,
+and changed ownership rules require a new ABI version.
 
 ## Status Values
 

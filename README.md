@@ -11,6 +11,13 @@ cmake --build --preset debug
 
 The debug binary is written to `build/debug/mattsql`.
 
+## Dev Container
+
+For Ubuntu-based development from macOS, use the
+[dev container](.devcontainer/README.md). It keeps Linux build artifacts in a
+Docker volume and provides the C++, CMake, debugger, Python, and Rust tools used
+by the normal presets.
+
 ## Run
 
 ```sh
@@ -31,6 +38,29 @@ ctest --preset debug
 
 Tests use CTest and a tiny local test harness in `tests/test_framework.hpp`, so
 the project has no dependency downloads.
+
+## Benchmark
+
+```sh
+cmake --preset profile
+cmake --build --preset profile --target mattsql_benchmarks
+ctest --preset profile -R mattsql.performance
+```
+
+Benchmarks live in `benchmarks/` and compare current profile-build results
+against `benchmarks/baseline.tsv`. The benchmark executable is also the target
+to run under Instruments, `perf`, `heaptrack`, or a VM/hypervisor profiler.
+
+Generate static performance visualizations with:
+
+```sh
+cmake --build --preset profile --target mattsql_performance_report
+cmake --build --preset profile --target mattsql_perfetto_traces
+```
+
+The report target writes current-vs-baseline and trend views under
+`build/profile/performance-report/`. The trace target writes
+Perfetto-compatible timeline artifacts under `build/profile/performance-artifacts/`.
 
 ## Docs
 

@@ -10,6 +10,7 @@ Related docs:
 - [Overview](../overview.md)
 - [Code-level invariants](../reference/invariants.md)
 - [Runtime C ABI](../reference/runtime_abi.md)
+- [Rust kernel runtime strategy](../reference/kernel_runtime_strategy.md)
 
 ## Implemented Pipeline
 
@@ -67,7 +68,9 @@ ABI and explicit boundary code.
 The C ABI runtime adapter exposes the same MVP runtime concepts through
 `include/mattsql/abi/runtime.h`. ABI version 1 is documented in
 [`docs/reference/runtime_abi.md`](../reference/runtime_abi.md) and is covered
-by C++ layout tests plus a Rust layout compile check when `rustc` is available.
+by C++ layout tests plus Rust layout and provider-smoke checks when `rustc` is
+available. The version-1 ABI working set is frozen for the first Rust
+kernel/runtime implementation.
 
 ## Test Coverage
 
