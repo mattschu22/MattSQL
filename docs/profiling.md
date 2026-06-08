@@ -38,6 +38,15 @@ Run the performance check used by CTest:
 ctest --preset profile -R mattsql.performance
 ```
 
+The CTest performance entry writes measured benchmark artifacts under
+`build/profile/performance-test/`:
+
+- `benchmark-results.json`: min, median, max, and iteration count per
+  benchmark.
+- `prometheus-metrics.prom`: Prometheus gauge metrics for Grafana/Pushgateway.
+- `index.html`: static current-vs-baseline report.
+- `current_vs_baseline.md`: Markdown summary for review comments.
+
 Generate static performance reports:
 
 ```sh
@@ -74,7 +83,8 @@ inside one subsystem instead of cycling through every benchmark:
 
 `benchmarks/baseline.tsv` records the current accepted median nanoseconds per
 benchmark iteration and a tolerated regression ratio. The CTest performance
-test runs the profile-build benchmark executable against that file.
+test runs the profile-build benchmark executable, writes metric artifacts, and
+then checks the measured medians against that file.
 
 Update baselines only from a quiet, stable runner:
 

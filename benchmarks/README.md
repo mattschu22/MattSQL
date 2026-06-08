@@ -26,6 +26,10 @@ CTest runs the same executable against the committed baseline:
 ctest --preset profile -R mattsql.performance
 ```
 
+The CTest performance wrapper writes `benchmark-results.json`,
+`prometheus-metrics.prom`, `index.html`, and `current_vs_baseline.md` under
+`build/profile/performance-test/` before applying the baseline gate.
+
 The baseline file is `benchmarks/baseline.tsv`. It tracks the prior median
 nanoseconds per benchmark iteration plus an allowed regression ratio. The
 default ratios are conservative because local wall-clock performance varies by

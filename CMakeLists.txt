@@ -211,19 +211,38 @@ if(MATTSQL_BUILD_BENCHMARKS)
   mattsql_apply_warnings(mattsql_benchmarks)
   mattsql_apply_profiler_options(mattsql_benchmarks)
 
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+
   if(BUILD_TESTING AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
-    add_test(
-      NAME mattsql.performance
-      COMMAND
-        mattsql_benchmarks
-        --check-baseline
-        ${PROJECT_SOURCE_DIR}/benchmarks/baseline.tsv
-        --quiet
-    )
+    if(Python3_Interpreter_FOUND)
+      add_test(
+        NAME mattsql.performance
+        COMMAND
+          ${Python3_EXECUTABLE}
+          ${PROJECT_SOURCE_DIR}/benchmarks/performance_test.py
+          --benchmark
+          $<TARGET_FILE:mattsql_benchmarks>
+          --baseline
+          ${PROJECT_SOURCE_DIR}/benchmarks/baseline.tsv
+          --output-dir
+          ${CMAKE_CURRENT_BINARY_DIR}/performance-test
+          --history
+          ${CMAKE_CURRENT_BINARY_DIR}/performance-history.jsonl
+          --label
+          ctest
+      )
+    else()
+      add_test(
+        NAME mattsql.performance
+        COMMAND
+          mattsql_benchmarks
+          --check-baseline
+          ${PROJECT_SOURCE_DIR}/benchmarks/baseline.tsv
+      )
+    endif()
     set_tests_properties(mattsql.performance PROPERTIES LABELS performance)
   endif()
 
-  find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
     add_custom_target(
       mattsql_performance_report
