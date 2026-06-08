@@ -72,21 +72,21 @@ python3 benchmarks/perf_visualize.py \
   --output-dir build/profile/performance-report
 ```
 
-## Grafana Metrics
+## Self-Hosted Grafana Metrics
 
-GitHub Actions publishes commit-tagged benchmark metrics to Grafana Cloud when
-the repository has OTLP secrets configured. The same payload can be generated
-locally from benchmark JSON:
+GitHub Actions publishes commit-tagged benchmark metrics to a self-hosted
+Prometheus Pushgateway when the repository has Pushgateway secrets configured.
+The same payload can be generated locally from benchmark JSON:
 
 ```sh
-python3 benchmarks/grafana_publish.py \
+python3 benchmarks/prometheus_publish.py \
   --current-json build/profile/benchmark-results.json \
   --baseline benchmarks/baseline.tsv \
-  --output-json build/profile/performance-report/grafana-otlp-metrics.json
+  --output-text build/profile/performance-report/prometheus-metrics.prom
 ```
 
 See [docs/profiling.md](../docs/profiling.md) for the GitHub Actions workflow,
-Grafana Cloud secret names, and dashboard import path.
+self-hosted stack, GitHub secret names, and dashboard path.
 
 ## Profiler Targets
 

@@ -8,6 +8,8 @@ Start here when navigating project documentation.
   for macOS-hosted editing.
 - [Profiling](profiling.md): benchmark workflow, Perfetto traces, flame graphs,
   and dev-container/custom-kernel profiling notes.
+- [Observability stack](../observability/README.md): no-cloud Grafana,
+  Prometheus, and Pushgateway setup for performance metrics.
 - [Current state](status/current_state.md): implemented pipeline, storage/runtime
   status, tests, and known gaps.
 - [Code-level invariants](reference/invariants.md): well-formedness rules for

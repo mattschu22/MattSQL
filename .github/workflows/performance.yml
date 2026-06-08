@@ -39,39 +39,35 @@ jobs:
             --label "${GITHUB_SHA:0:12}" \
             --no-append-history || true
 
-      - name: Prepare Grafana OTLP payload
+      - name: Prepare Prometheus metrics
         run: |
-          python3 benchmarks/grafana_publish.py \
+          python3 benchmarks/prometheus_publish.py \
             --current-json build/profile/benchmark-results.json \
             --baseline benchmarks/baseline.tsv \
-            --output-json build/profile/performance-report/grafana-otlp-metrics.json
+            --output-text build/profile/performance-report/prometheus-metrics.prom
 
       - name: Check benchmark baseline
         id: baseline
         continue-on-error: true
         run: ctest --preset profile -R mattsql.performance --output-on-failure
 
-      - name: Publish metrics to Grafana Cloud
+      - name: Publish metrics to self-hosted Pushgateway
         if: ${{ github.event_name != 'pull_request' }}
         env:
-          GRAFANA_OTLP_ENDPOINT: ${{ secrets.GRAFANA_OTLP_ENDPOINT }}
-          GRAFANA_OTLP_HEADERS: ${{ secrets.GRAFANA_OTLP_HEADERS }}
-          GRAFANA_INSTANCE_ID: ${{ secrets.GRAFANA_INSTANCE_ID }}
-          GRAFANA_API_TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
+          PUSHGATEWAY_URL: ${{ secrets.PUSHGATEWAY_URL }}
+          PUSHGATEWAY_HEADERS: ${{ secrets.PUSHGATEWAY_HEADERS }}
+          PUSHGATEWAY_USERNAME: ${{ secrets.PUSHGATEWAY_USERNAME }}
+          PUSHGATEWAY_PASSWORD: ${{ secrets.PUSHGATEWAY_PASSWORD }}
           MATTSQL_PERF_ENVIRONMENT: ci
         run: |
-          if [ -z "$GRAFANA_OTLP_ENDPOINT" ]; then
-            echo "Grafana OTLP endpoint is not configured; skipping publish."
+          if [ -z "$PUSHGATEWAY_URL" ]; then
+            echo "Pushgateway URL is not configured; skipping publish."
             exit 0
           fi
-          if [ -z "$GRAFANA_OTLP_HEADERS" ] && { [ -z "$GRAFANA_INSTANCE_ID" ] || [ -z "$GRAFANA_API_TOKEN" ]; }; then
-            echo "Grafana credentials are not configured; skipping publish."
-            exit 0
-          fi
-          python3 benchmarks/grafana_publish.py \
+          python3 benchmarks/prometheus_publish.py \
             --current-json build/profile/benchmark-results.json \
             --baseline benchmarks/baseline.tsv \
-            --output-json build/profile/performance-report/grafana-otlp-metrics.json \
+            --output-text build/profile/performance-report/prometheus-metrics.prom \
             --publish
 
       - name: Upload performance artifacts

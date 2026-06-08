@@ -250,7 +250,10 @@
   "templating": {
     "list": [
       {
-        "current": {},
+        "current": {
+          "text": "MattSQL Prometheus",
+          "value": "mattsql-prometheus"
+        },
         "hide": 0,
         "includeAll": false,
         "label": "Prometheus",

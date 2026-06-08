@@ -11,6 +11,7 @@ Related docs:
 - [Overview](overview.md)
 - [Benchmarks](../benchmarks/README.md)
 - [Dev container](../.devcontainer/README.md)
+- [Observability stack](../observability/README.md)
 
 ## Goals
 
@@ -49,14 +50,14 @@ Generate trace and flame graph artifacts:
 cmake --build --preset profile --target mattsql_perfetto_traces
 ```
 
-Generate a Grafana OTLP metrics payload from an existing benchmark run:
+Generate Prometheus metrics from an existing benchmark run:
 
 ```sh
 ./build/profile/mattsql_benchmarks --json > build/profile/benchmark-results.json
-python3 benchmarks/grafana_publish.py \
+python3 benchmarks/prometheus_publish.py \
   --current-json build/profile/benchmark-results.json \
   --baseline benchmarks/baseline.tsv \
-  --output-json build/profile/performance-report/grafana-otlp-metrics.json
+  --output-text build/profile/performance-report/prometheus-metrics.prom
 ```
 
 The benchmark executable supports filters so profiler sessions can spend time
@@ -151,37 +152,66 @@ trace-derived flame graph remains usable. Run the same workflow in a native
 Ubuntu VM or bare-metal Linux environment when trustworthy sampled CPU profiles
 are required.
 
-## Grafana Cloud Pipeline
+## Self-Hosted Grafana Pipeline
 
 The GitHub Actions workflow in `.github/workflows/performance.yml` runs the
 profile benchmark suite for branch pushes, pull requests, and manual
 dispatches. It uploads the raw benchmark JSON, static performance report, and
-Grafana OTLP payload as workflow artifacts.
+Prometheus metrics payload as workflow artifacts.
 
-The publisher uses Grafana Cloud's
-[OTLP endpoint](https://grafana.com/docs/grafana-cloud/send-data/otlp/send-data-otlp/)
-and sends OTLP/HTTP JSON metrics to the standard
-[`/v1/metrics` path](https://opentelemetry.io/docs/specs/otlp/#otlphttp).
+The no-cloud stack lives under `observability/` and runs Grafana, Prometheus,
+and Pushgateway:
 
-For pushes and manual dispatches, the workflow publishes metrics to Grafana
-Cloud when repository secrets are configured. Pull requests intentionally do not
-publish metrics because forked PRs do not receive secrets and because PR runs
-can be noisier than the main-branch trend.
+```sh
+docker compose -f observability/docker-compose.yml up -d
+```
 
-Configure one of these secret sets:
+Default local endpoints:
 
-- `GRAFANA_OTLP_ENDPOINT`: the Grafana Cloud OTLP endpoint, such as
-  `https://otlp-gateway-prod-us-east-0.grafana.net/otlp`.
-- `GRAFANA_OTLP_HEADERS`: OTLP headers copied from Grafana Cloud, such as
-  `Authorization=Basic%20...`.
+- Grafana: `http://localhost:3000`
+- Prometheus: `http://localhost:9090`
+- Pushgateway: `http://localhost:9091`
 
-Or:
+Grafana provisions the MattSQL dashboard and Prometheus data source
+automatically. The dashboard definition is
+`observability/grafana/mattsql-performance-dashboard.json`.
 
-- `GRAFANA_OTLP_ENDPOINT`: the Grafana Cloud OTLP endpoint.
-- `GRAFANA_INSTANCE_ID`: the Grafana Cloud metrics or OTLP instance ID.
-- `GRAFANA_API_TOKEN`: a token with permission to publish OTLP metrics.
+Prometheus scrapes Pushgateway. The GitHub Actions workflow publishes benchmark
+metrics to Pushgateway for pushes and manual dispatches when repository secrets
+are configured. Pull requests intentionally do not publish metrics because
+forked PRs do not receive secrets and because PR runs can be noisier than the
+main-branch trend.
 
-`benchmarks/grafana_publish.py` writes these gauge metrics:
+Prometheus documents Pushgateway as the usual valid push path for
+service-level batch jobs. CI benchmarks fit that shape because the benchmark
+process is short-lived and reports the outcome of a repo-level run.
+
+GitHub Actions is optional. For local-only automation, install the tracked git
+hooks:
+
+```sh
+scripts/install-git-hooks.sh
+```
+
+The local `post-commit` hook records and publishes metrics after each commit.
+The local `pre-push` hook records metrics and fails the push when benchmark
+results exceed the committed baseline limits. Set `MATTSQL_SKIP_PERF_HOOKS=1`
+to skip the hooks for one command.
+
+Configure these repository secrets:
+
+- `PUSHGATEWAY_URL`: public HTTPS URL for a reverse proxy in front of
+  Pushgateway, or a private URL reachable from a self-hosted GitHub runner.
+- `PUSHGATEWAY_USERNAME`: optional basic-auth username.
+- `PUSHGATEWAY_PASSWORD`: optional basic-auth password.
+- `PUSHGATEWAY_HEADERS`: optional comma-separated headers, such as
+  `Authorization=Bearer%20...`.
+
+Do not expose the raw Pushgateway directly to the public internet. Put it
+behind HTTPS and authentication, or run the workflow on a self-hosted GitHub
+runner on the same network and set `PUSHGATEWAY_URL` to the private endpoint.
+
+`benchmarks/prometheus_publish.py` writes these gauge metrics:
 
 - `mattsql_benchmark_median_ns`
 - `mattsql_benchmark_min_ns`
@@ -193,11 +223,9 @@ Or:
 - `mattsql_benchmark_regression`
 - `mattsql_benchmark_regression_threshold_ratio`
 
-Each data point includes labels for benchmark name, subsystem family, branch,
-commit SHA, short commit, repository, GitHub run metadata, and baseline status.
-Import `observability/grafana/mattsql-performance-dashboard.json` into Grafana
-and point the dashboard at the Prometheus/Mimir data source receiving OTLP
-metrics.
+Each data point includes labels for benchmark name, subsystem family, CI
+environment, branch, commit SHA, short commit, repository, GitHub run metadata,
+and baseline status.
 
 The workflow publishes metrics even if the baseline check detects a regression,
 then fails the job afterward. This preserves the regression datapoint in

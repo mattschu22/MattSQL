@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -u
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+MATTSQL_PERF_CHECK_BASELINE=0 "$repo_root/scripts/perf/local_perf.sh" \
+  --event post-commit || {
+  status=$?
+  echo "[mattsql-perf] post-commit performance recording failed with $status" >&2
+  echo "[mattsql-perf] commit already succeeded; continuing" >&2
+  exit 0
+}
