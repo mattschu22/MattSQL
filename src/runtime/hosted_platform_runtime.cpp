@@ -1,6 +1,7 @@
 #include "mattsql/runtime/hosted_platform_runtime.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 #include "mattsql/storage/block_device.hpp"
 
 #include <chrono>
@@ -122,6 +123,8 @@ Result<RuntimePageAllocation>
 HostedPlatformRuntime::AllocatePages(std::size_t page_count,
                                      std::size_t alignment,
                                      RuntimeMemoryFlags flags) {
+  ScopedTrace trace("mattsql::HostedPlatformRuntime::AllocatePages",
+                    "function.runtime");
   if (page_count == 0) {
     return error_result<RuntimePageAllocation>(ErrorCode::InvalidArgument,
                                                "page count must be positive");
@@ -170,6 +173,8 @@ HostedPlatformRuntime::AllocatePages(std::size_t page_count,
 }
 
 Status HostedPlatformRuntime::FreePages(const RuntimePageAllocation &allocation) {
+  ScopedTrace trace("mattsql::HostedPlatformRuntime::FreePages",
+                    "function.runtime");
   if (allocation.data == nullptr) {
     return error_status(ErrorCode::InvalidArgument, "allocation data is null");
   }
@@ -184,6 +189,8 @@ Status HostedPlatformRuntime::FreePages(const RuntimePageAllocation &allocation)
 
 Result<IoSubmissionResult>
 HostedPlatformRuntime::SubmitIoBatch(std::span<const IoRequest> requests) {
+  ScopedTrace trace("mattsql::HostedPlatformRuntime::SubmitIoBatch",
+                    "function.runtime");
   if (requests.empty()) {
     return error_result<IoSubmissionResult>(ErrorCode::InvalidArgument,
                                             "I/O batch must be non-empty");
@@ -288,6 +295,8 @@ HostedPlatformRuntime::SubmitIoBatch(std::span<const IoRequest> requests) {
 
 Result<std::size_t>
 HostedPlatformRuntime::PollIoCompletions(std::span<IoCompletion> completions) {
+  ScopedTrace trace("mattsql::HostedPlatformRuntime::PollIoCompletions",
+                    "function.runtime");
   if (completions.empty()) {
     return error_result<std::size_t>(ErrorCode::InvalidArgument,
                                      "completion output span must be non-empty");
@@ -304,16 +313,21 @@ HostedPlatformRuntime::PollIoCompletions(std::span<IoCompletion> completions) {
 
 Result<RuntimeTaskId>
 HostedPlatformRuntime::SpawnTask(const TaskDescriptor &descriptor) {
+  ScopedTrace trace("mattsql::HostedPlatformRuntime::SpawnTask",
+                    "function.runtime");
   (void)descriptor;
   return ok_result(impl_->next_task_id++);
 }
 
 Status HostedPlatformRuntime::Yield() {
+  ScopedTrace trace("mattsql::HostedPlatformRuntime::Yield", "function.runtime");
   std::this_thread::yield();
   return ok_status();
 }
 
 std::uint64_t HostedPlatformRuntime::MonotonicNanos() const {
+  ScopedTrace trace("mattsql::HostedPlatformRuntime::MonotonicNanos",
+                    "function.runtime");
   const auto now = std::chrono::steady_clock::now().time_since_epoch();
   return static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(now).count());

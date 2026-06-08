@@ -1,6 +1,7 @@
 #include "mattsql/storage/tuple_codec.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 #include "mattsql/common/value_utils.hpp"
 #include "mattsql/storage/byte_io.hpp"
 
@@ -54,6 +55,7 @@ void append_i64(std::vector<std::byte> &bytes, std::int64_t value) {
 
 Result<Tuple> BinaryTupleCodec::Encode(const TableSchema &schema,
                                        const std::vector<Value> &values) const {
+  ScopedTrace trace("mattsql::BinaryTupleCodec::Encode", "function.storage");
   if (values.size() != schema.columns.size()) {
     return error_result<Tuple>(ErrorCode::InvalidArgument,
                                "tuple value count does not match schema");
@@ -115,6 +117,7 @@ Result<Tuple> BinaryTupleCodec::Encode(const TableSchema &schema,
 
 Result<std::vector<Value>> BinaryTupleCodec::Decode(const TableSchema &schema,
                                                     ConstBufferView record) const {
+  ScopedTrace trace("mattsql::BinaryTupleCodec::Decode", "function.storage");
   std::vector<Value> values;
   values.reserve(schema.columns.size());
 

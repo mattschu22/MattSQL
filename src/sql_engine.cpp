@@ -3,6 +3,7 @@
 #include "mattsql/binder/default_binder.hpp"
 #include "mattsql/catalog/in_memory_catalog.hpp"
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 #include "mattsql/execution/default_executor.hpp"
 #include "mattsql/lexer/lexer.hpp"
 #include "mattsql/optimizer/default_optimizer.hpp"
@@ -37,6 +38,7 @@ private:
 };
 
 [[nodiscard]] Result<StatementPtr> parse_sql(std::string_view sql) {
+  ScopedTrace trace("mattsql::parse_sql", "function.frontend");
   try {
     Lexer lexer(sql);
     Parser parser(lexer.Tokenize());
@@ -83,12 +85,15 @@ DefaultSqlEngine &DefaultSqlEngine::operator=(DefaultSqlEngine &&) noexcept = de
 DefaultSqlEngine::~DefaultSqlEngine() = default;
 
 Result<QueryResult> DefaultSqlEngine::Execute(std::string_view sql) {
+  ScopedTrace trace("mattsql::DefaultSqlEngine::Execute", "function.engine");
   DefaultStatementTransaction transaction;
   return Execute(sql, transaction);
 }
 
 Result<QueryResult> DefaultSqlEngine::Execute(std::string_view sql,
                                               Transaction &transaction) {
+  ScopedTrace trace("mattsql::DefaultSqlEngine::ExecuteWithTransaction",
+                    "function.engine");
   if (components_ == nullptr || components_->catalog == nullptr ||
       components_->storage == nullptr || components_->runtime == nullptr) {
     return error_result<QueryResult>(ErrorCode::Internal,

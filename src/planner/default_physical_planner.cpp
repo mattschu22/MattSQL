@@ -2,6 +2,7 @@
 
 #include "mattsql/binder/expression_utils.hpp"
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 #include "mattsql/planner/plan_utils.hpp"
 
 #include <memory>
@@ -216,6 +217,7 @@ plan_projection(const LogicalProjection &logical) {
 } // namespace
 
 Result<PhysicalPlanPtr> DefaultPhysicalPlanner::Plan(const LogicalPlan &plan) {
+  ScopedTrace trace("mattsql::DefaultPhysicalPlanner::Plan", "function.frontend");
   return plan_node(plan);
 }
 

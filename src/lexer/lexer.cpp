@@ -2,6 +2,7 @@
 #include "mattsql/lexer/token.hpp"
 
 #include "mattsql/common/identifier.hpp"
+#include "mattsql/common/trace.hpp"
 
 #include <array>
 #include <cctype>
@@ -37,6 +38,7 @@ Lexer::Lexer(std::string_view input) : input_(input) {}
 
 /// Tokenizes the full SQL input and appends a final EOF token.
 std::vector<Token> Lexer::Tokenize() {
+  ScopedTrace trace("mattsql::Lexer::Tokenize", "function.frontend");
   std::vector<Token> tokens;
 
   while (true) {

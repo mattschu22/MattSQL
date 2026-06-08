@@ -18,6 +18,10 @@ For Ubuntu-based development from macOS, use the
 Docker volume and provides the C++, CMake, debugger, Python, and Rust tools used
 by the normal presets.
 
+To start it, run Docker Desktop, open this repository in VS Code or Codex, and
+choose `Dev Containers: Reopen in Container`. The first start builds the Ubuntu
+image and runs `cmake --preset debug`.
+
 ## Run
 
 ```sh

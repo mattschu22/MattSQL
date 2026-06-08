@@ -2,6 +2,7 @@
 
 #include "mattsql/binder/expression_utils.hpp"
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 #include "mattsql/common/value_utils.hpp"
 
 #include <cstdint>
@@ -370,6 +371,7 @@ Status DefaultOptimizer::AddRule(std::unique_ptr<OptimizerRule> rule) {
 }
 
 Result<LogicalPlanPtr> DefaultOptimizer::Optimize(LogicalPlanPtr plan) {
+  ScopedTrace trace("mattsql::DefaultOptimizer::Optimize", "function.frontend");
   if (plan == nullptr) {
     return error_result<LogicalPlanPtr>(ErrorCode::InvalidArgument,
                                         "logical plan is required");

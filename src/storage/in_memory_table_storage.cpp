@@ -1,6 +1,7 @@
 #include "mattsql/storage/in_memory_table_storage.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 #include "mattsql/storage/heap/page_heap_table.hpp"
 
 #include <cstddef>
@@ -37,6 +38,8 @@ InMemoryTableStorageManager &InMemoryTableStorageManager::operator=(
 
 Result<PageId> InMemoryTableStorageManager::CreateHeap(Transaction &transaction,
                                                        const TableInfo &table) {
+  ScopedTrace trace("mattsql::InMemoryTableStorageManager::CreateHeap",
+                    "function.storage");
   (void)transaction;
   if (impl_->tables.contains(table.id)) {
     return error_result<PageId>(ErrorCode::AlreadyExists, "heap already exists");
@@ -54,6 +57,8 @@ Result<PageId> InMemoryTableStorageManager::CreateHeap(Transaction &transaction,
 
 Result<std::unique_ptr<HeapTable>>
 InMemoryTableStorageManager::OpenHeap(const TableStorageReference &reference) {
+  ScopedTrace trace("mattsql::InMemoryTableStorageManager::OpenHeap",
+                    "function.storage");
   if (reference.method != TableStorageMethod::Heap) {
     return error_result<std::unique_ptr<HeapTable>>(
         ErrorCode::NotSupported, "only heap table storage is supported");
@@ -74,6 +79,8 @@ InMemoryTableStorageManager::OpenHeap(const TableStorageReference &reference) {
 }
 
 Result<std::size_t> InMemoryTableStorageManager::RecordCount(TableId table_id) const {
+  ScopedTrace trace("mattsql::InMemoryTableStorageManager::RecordCount",
+                    "function.storage");
   const auto table_iter = impl_->tables.find(table_id);
   if (table_iter == impl_->tables.end()) {
     return error_result<std::size_t>(ErrorCode::NotFound, "heap not found");

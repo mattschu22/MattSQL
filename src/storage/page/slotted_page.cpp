@@ -1,6 +1,7 @@
 #include "mattsql/storage/page/slotted_page.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 #include "mattsql/storage/byte_io.hpp"
 
 #include <algorithm>
@@ -118,6 +119,7 @@ void write_slot(std::span<std::byte> bytes, SlotId slot_id, SlotEntry entry) {
 } // namespace
 
 Status DefaultSlottedPage::Initialize(PageView page, PageKind kind) {
+  ScopedTrace trace("mattsql::DefaultSlottedPage::Initialize", "function.storage");
   if (page.header == nullptr) {
     return error_status(ErrorCode::InvalidArgument, "page header is required");
   }
@@ -142,6 +144,7 @@ Status DefaultSlottedPage::Initialize(PageView page, PageKind kind) {
 }
 
 Result<SlotId> DefaultSlottedPage::Insert(PageView page, ConstBufferView record) {
+  ScopedTrace trace("mattsql::DefaultSlottedPage::Insert", "function.storage");
   const auto page_status = validate_page(page);
   if (!status_ok(page_status)) {
     return error_result<SlotId>(page_status);
@@ -182,6 +185,7 @@ Result<SlotId> DefaultSlottedPage::Insert(PageView page, ConstBufferView record)
 }
 
 Result<RecordView> DefaultSlottedPage::Read(ConstPageView page, SlotId slot_id) const {
+  ScopedTrace trace("mattsql::DefaultSlottedPage::Read", "function.storage");
   const auto page_status = validate_page(page);
   if (!status_ok(page_status)) {
     return error_result<RecordView>(page_status);
@@ -209,6 +213,7 @@ Result<RecordView> DefaultSlottedPage::Read(ConstPageView page, SlotId slot_id) 
 }
 
 Status DefaultSlottedPage::Delete(PageView page, SlotId slot_id) {
+  ScopedTrace trace("mattsql::DefaultSlottedPage::Delete", "function.storage");
   const auto page_status = validate_page(page);
   if (!status_ok(page_status)) {
     return page_status;
@@ -233,6 +238,7 @@ Status DefaultSlottedPage::Delete(PageView page, SlotId slot_id) {
 }
 
 std::size_t DefaultSlottedPage::FreeSpace(ConstPageView page) const {
+  ScopedTrace trace("mattsql::DefaultSlottedPage::FreeSpace", "function.storage");
   const auto page_status = validate_page(page);
   if (!status_ok(page_status)) {
     return 0;
@@ -243,6 +249,7 @@ std::size_t DefaultSlottedPage::FreeSpace(ConstPageView page) const {
 }
 
 std::size_t DefaultSlottedPage::SlotCount(ConstPageView page) const {
+  ScopedTrace trace("mattsql::DefaultSlottedPage::SlotCount", "function.storage");
   const auto page_status = validate_page(page);
   if (!status_ok(page_status)) {
     return 0;

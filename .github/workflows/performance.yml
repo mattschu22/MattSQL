@@ -1,0 +1,89 @@
+name: Performance
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    name: Benchmarks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure profile build
+        run: cmake --preset profile
+
+      - name: Build benchmark target
+        run: cmake --build --preset profile --target mattsql_benchmarks
+
+      - name: Run benchmark JSON
+        run: |
+          mkdir -p build/profile/performance-report
+          ./build/profile/mattsql_benchmarks --json > build/profile/benchmark-results.json
+
+      - name: Generate local performance report
+        run: |
+          python3 benchmarks/perf_visualize.py \
+            --current-json build/profile/benchmark-results.json \
+            --baseline benchmarks/baseline.tsv \
+            --output-dir build/profile/performance-report \
+            --history build/profile/performance-history.jsonl \
+            --label "${GITHUB_SHA:0:12}" \
+            --no-append-history || true
+
+      - name: Prepare Grafana OTLP payload
+        run: |
+          python3 benchmarks/grafana_publish.py \
+            --current-json build/profile/benchmark-results.json \
+            --baseline benchmarks/baseline.tsv \
+            --output-json build/profile/performance-report/grafana-otlp-metrics.json
+
+      - name: Check benchmark baseline
+        id: baseline
+        continue-on-error: true
+        run: ctest --preset profile -R mattsql.performance --output-on-failure
+
+      - name: Publish metrics to Grafana Cloud
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          GRAFANA_OTLP_ENDPOINT: ${{ secrets.GRAFANA_OTLP_ENDPOINT }}
+          GRAFANA_OTLP_HEADERS: ${{ secrets.GRAFANA_OTLP_HEADERS }}
+          GRAFANA_INSTANCE_ID: ${{ secrets.GRAFANA_INSTANCE_ID }}
+          GRAFANA_API_TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
+          MATTSQL_PERF_ENVIRONMENT: ci
+        run: |
+          if [ -z "$GRAFANA_OTLP_ENDPOINT" ]; then
+            echo "Grafana OTLP endpoint is not configured; skipping publish."
+            exit 0
+          fi
+          if [ -z "$GRAFANA_OTLP_HEADERS" ] && { [ -z "$GRAFANA_INSTANCE_ID" ] || [ -z "$GRAFANA_API_TOKEN" ]; }; then
+            echo "Grafana credentials are not configured; skipping publish."
+            exit 0
+          fi
+          python3 benchmarks/grafana_publish.py \
+            --current-json build/profile/benchmark-results.json \
+            --baseline benchmarks/baseline.tsv \
+            --output-json build/profile/performance-report/grafana-otlp-metrics.json \
+            --publish
+
+      - name: Upload performance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mattsql-performance-${{ github.sha }}
+          path: |
+            build/profile/benchmark-results.json
+            build/profile/performance-report/
+          if-no-files-found: warn
+
+      - name: Fail on benchmark regression
+        if: ${{ steps.baseline.outcome == 'failure' }}
+        run: exit 1

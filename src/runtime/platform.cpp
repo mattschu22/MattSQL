@@ -1,6 +1,7 @@
 #include "mattsql/runtime/platform.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 
 #include <cstddef>
 #include <limits>
@@ -12,12 +13,15 @@ namespace mattsql {
 PlatformRuntime::~PlatformRuntime() = default;
 
 Result<RuntimePageAllocation> PlatformRuntime::AllocatePages(std::size_t page_count) {
+  ScopedTrace trace("mattsql::PlatformRuntime::AllocatePages", "function.runtime");
   return AllocatePages(page_count, kDefaultPageSize, kRuntimeMemoryZeroed);
 }
 
 Result<RuntimePageAllocationHandle>
 PlatformRuntime::AllocatePageSpan(std::size_t page_count, std::size_t alignment,
                                   RuntimeMemoryFlags flags) {
+  ScopedTrace trace("mattsql::PlatformRuntime::AllocatePageSpan",
+                    "function.runtime");
   auto allocation = AllocatePages(page_count, alignment, flags);
   if (!allocation.ok()) {
     return error_result<RuntimePageAllocationHandle>(std::move(allocation.status));
@@ -32,10 +36,13 @@ PlatformRuntime::AllocatePageSpan(std::size_t page_count, std::size_t alignment,
 
 Result<RuntimePageAllocationHandle>
 PlatformRuntime::AllocatePageSpan(std::size_t page_count) {
+  ScopedTrace trace("mattsql::PlatformRuntime::AllocatePageSpanDefault",
+                    "function.runtime");
   return AllocatePageSpan(page_count, kDefaultPageSize, kRuntimeMemoryZeroed);
 }
 
 Result<IoRequestId> PlatformRuntime::SubmitIo(const IoRequest &request) {
+  ScopedTrace trace("mattsql::PlatformRuntime::SubmitIo", "function.runtime");
   const auto submission = SubmitIoBatch(std::span<const IoRequest>(&request, 1));
   if (!submission.ok()) {
     return error_result<IoRequestId>(submission.status);
@@ -59,6 +66,8 @@ Result<IoRequestId> PlatformRuntime::SubmitIo(const IoRequest &request) {
 }
 
 Result<IoCompletion> PlatformRuntime::PollIoCompletion() {
+  ScopedTrace trace("mattsql::PlatformRuntime::PollIoCompletion",
+                    "function.runtime");
   IoCompletion completion;
   const auto count = PollIoCompletions(std::span<IoCompletion>(&completion, 1));
   if (!count.ok()) {

@@ -72,6 +72,22 @@ python3 benchmarks/perf_visualize.py \
   --output-dir build/profile/performance-report
 ```
 
+## Grafana Metrics
+
+GitHub Actions publishes commit-tagged benchmark metrics to Grafana Cloud when
+the repository has OTLP secrets configured. The same payload can be generated
+locally from benchmark JSON:
+
+```sh
+python3 benchmarks/grafana_publish.py \
+  --current-json build/profile/benchmark-results.json \
+  --baseline benchmarks/baseline.tsv \
+  --output-json build/profile/performance-report/grafana-otlp-metrics.json
+```
+
+See [docs/profiling.md](../docs/profiling.md) for the GitHub Actions workflow,
+Grafana Cloud secret names, and dashboard import path.
+
 ## Profiler Targets
 
 Use the benchmark filter to make profiler sessions long and focused:
@@ -103,8 +119,16 @@ cmake --build --preset profile --target mattsql_perfetto_traces
 The target writes `*.trace.json` files under
 `build/profile/performance-artifacts/`. Open those files in Perfetto UI or
 Chrome's trace viewer. The trace contains complete events for benchmark samples
-plus subsystem spans such as parse, bind, optimize, execute, tuple codec,
-slotted page, heap scan, and runtime allocation.
+plus function-level spans such as `mattsql::Lexer::Tokenize`,
+`mattsql::DefaultSqlEngine::Execute`, `mattsql::BinaryTupleCodec::Encode`,
+`mattsql::DefaultSlottedPage::Insert`, `mattsql::PageHeapTable::Insert`, and
+`mattsql::PageHeapTable::Cursor::Next`.
+
+When `flamegraph.pl` is available, `profile_artifacts.py` also converts those
+function-level trace events into folded stacks and writes
+`*.trace-flamegraph.svg`. This SVG is based on traced function durations, so it
+works in Docker Desktop/dev containers even when kernel perf sampling is
+unavailable.
 
 On Linux, generate perf flame graph artifacts when `perf`,
 `stackcollapse-perf.pl`, and `flamegraph.pl` are available:
@@ -118,4 +142,8 @@ python3 benchmarks/profile_artifacts.py \
 ```
 
 The helper always writes trace artifacts. Flame graph SVGs are added when the
-Linux profiling tools are present and the host permits `perf record`.
+Linux profiling tools are present and the host permits `perf record`. In the
+dev container, Docker Desktop may reject `perf record` because the LinuxKit host
+kernel does not match Ubuntu's `linux-tools-*` packages; use the
+trace-derived flame graph in that case, or run the same command in a native
+Ubuntu VM for a sampled CPU flame graph.

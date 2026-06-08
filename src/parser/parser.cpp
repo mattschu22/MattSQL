@@ -1,6 +1,7 @@
 #include "mattsql/parser/parser.hpp"
 
 #include "mattsql/common/identifier.hpp"
+#include "mattsql/common/trace.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -58,6 +59,7 @@ Parser::Parser(std::vector<Token> tokens) : tokens_(std::move(tokens)) {
 
 /// Parses one complete SQL statement and verifies there is no trailing input.
 StatementPtr Parser::ParseStatement() {
+  ScopedTrace trace("mattsql::Parser::ParseStatement", "function.frontend");
   StatementPtr statement;
 
   if (Match(TokenType::Select)) {

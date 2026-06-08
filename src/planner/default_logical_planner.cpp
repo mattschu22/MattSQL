@@ -2,6 +2,7 @@
 
 #include "mattsql/binder/expression_utils.hpp"
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 
 #include <memory>
 #include <string>
@@ -146,6 +147,7 @@ plan_create_table(const BoundCreateTableStatement &statement) {
 } // namespace
 
 Result<LogicalPlanPtr> DefaultLogicalPlanner::Plan(const BoundStatement &statement) {
+  ScopedTrace trace("mattsql::DefaultLogicalPlanner::Plan", "function.frontend");
   if (const auto *select = dynamic_cast<const BoundSelectStatement *>(&statement)) {
     return plan_select(*select);
   }

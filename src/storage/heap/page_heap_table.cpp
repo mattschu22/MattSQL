@@ -1,6 +1,7 @@
 #include "mattsql/storage/heap/page_heap_table.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -95,6 +96,8 @@ public:
   explicit Cursor(std::shared_ptr<PageHeapTable::Impl> heap) : heap_(std::move(heap)) {}
 
   Result<RecordView> Next() override {
+    ScopedTrace trace("mattsql::PageHeapTable::Cursor::Next",
+                      "function.storage");
     while (page_index_ < heap_->pages.size()) {
       const auto &page = heap_->pages[page_index_];
       const auto slot_count = heap_->slotted_page.SlotCount(page.Const());
@@ -137,6 +140,7 @@ PageHeapTable::~PageHeapTable() = default;
 
 Result<RecordId> PageHeapTable::Insert(Transaction &transaction,
                                        ConstBufferView record) {
+  ScopedTrace trace("mattsql::PageHeapTable::Insert", "function.storage");
   (void)transaction;
   for (auto &page : impl_->pages) {
     auto slot = impl_->slotted_page.Insert(page.Mutable(), record);
@@ -165,6 +169,7 @@ Result<RecordId> PageHeapTable::Insert(Transaction &transaction,
 }
 
 Result<RecordView> PageHeapTable::Read(Transaction &transaction, RecordId record_id) {
+  ScopedTrace trace("mattsql::PageHeapTable::Read", "function.storage");
   (void)transaction;
   const auto *page = impl_->FindPage(record_id.page_id);
   if (page == nullptr) {
@@ -175,6 +180,7 @@ Result<RecordView> PageHeapTable::Read(Transaction &transaction, RecordId record
 }
 
 Status PageHeapTable::Delete(Transaction &transaction, RecordId record_id) {
+  ScopedTrace trace("mattsql::PageHeapTable::Delete", "function.storage");
   (void)transaction;
   auto *page = impl_->FindPage(record_id.page_id);
   if (page == nullptr) {
@@ -191,6 +197,7 @@ Status PageHeapTable::Delete(Transaction &transaction, RecordId record_id) {
 }
 
 Result<std::unique_ptr<HeapCursor>> PageHeapTable::Scan(Transaction &transaction) {
+  ScopedTrace trace("mattsql::PageHeapTable::Scan", "function.storage");
   (void)transaction;
   return ok_result<std::unique_ptr<HeapCursor>>(std::make_unique<Cursor>(impl_));
 }

@@ -6,6 +6,8 @@ Start here when navigating project documentation.
   commands.
 - [Dev container](../.devcontainer/README.md): Ubuntu 24.04 development setup
   for macOS-hosted editing.
+- [Profiling](profiling.md): benchmark workflow, Perfetto traces, flame graphs,
+  and dev-container/custom-kernel profiling notes.
 - [Current state](status/current_state.md): implemented pipeline, storage/runtime
   status, tests, and known gaps.
 - [Code-level invariants](reference/invariants.md): well-formedness rules for

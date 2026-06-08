@@ -3,6 +3,7 @@
 #include "mattsql/binder/expression_utils.hpp"
 #include "mattsql/common/identifier.hpp"
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 
 #include <cstdint>
 #include <limits>
@@ -483,6 +484,7 @@ bind_create_table(const CreateTableStatement &statement, Catalog &catalog) {
 
 Result<BoundStatementPtr> DefaultBinder::Bind(const Statement &statement,
                                               Catalog &catalog) {
+  ScopedTrace trace("mattsql::DefaultBinder::Bind", "function.frontend");
   if (const auto *select = dynamic_cast<const SelectStatement *>(&statement)) {
     return bind_select(*select, catalog);
   }

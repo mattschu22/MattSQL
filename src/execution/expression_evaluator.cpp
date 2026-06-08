@@ -1,6 +1,7 @@
 #include "mattsql/execution/expressions/evaluator.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 #include "mattsql/common/value_utils.hpp"
 
 #include <cstdint>
@@ -241,6 +242,8 @@ evaluate_logical_and(ExpressionEvaluator &evaluator,
 
 Result<Value> DefaultExpressionEvaluator::Evaluate(const BoundExpression &expression,
                                                    const EvaluationContext &context) {
+  ScopedTrace trace("mattsql::DefaultExpressionEvaluator::Evaluate",
+                    "function.execution");
   if (const auto *literal =
           dynamic_cast<const BoundLiteralExpression *>(&expression)) {
     return ok_result(literal->value);
@@ -282,6 +285,7 @@ Result<std::vector<Value>>
 EvaluateExpressions(ExpressionEvaluator &evaluator,
                     const std::vector<BoundExpressionPtr> &expressions,
                     const EvaluationContext &context) {
+  ScopedTrace trace("mattsql::EvaluateExpressions", "function.execution");
   std::vector<Value> values;
   values.reserve(expressions.size());
 

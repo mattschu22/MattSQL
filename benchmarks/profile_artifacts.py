@@ -98,13 +98,113 @@ def collect_trace(
         "--json",
     ]
     result = run_command(command, stdout_path=results_path, stderr_path=stderr_path)
-    return {
+    artifact = {
         "filter": benchmark_filter,
         "trace": str(trace_path),
         "results": str(results_path),
         "stderr": str(stderr_path),
         "returncode": result.returncode,
     }
+    if result.returncode == 0:
+        artifact.update(generate_trace_flamegraph(trace_path, output_dir, stem))
+    return artifact
+
+
+def clean_stack_name(name: str) -> str:
+    return name.replace(";", ":").strip() or "unknown"
+
+
+def trace_events_to_folded(trace_path: Path, folded_path: Path) -> int:
+    data = json.loads(trace_path.read_text(encoding="utf-8"))
+    events = []
+    for event_id, event in enumerate(data.get("traceEvents", [])):
+        if event.get("ph") != "X":
+            continue
+        name = clean_stack_name(str(event.get("name", "unknown")))
+        start = float(event.get("ts", 0.0))
+        duration = float(event.get("dur", 0.0))
+        if duration <= 0:
+            continue
+        end = start + duration
+        events.append({"id": event_id, "name": name, "start": start, "end": end})
+
+    if not events:
+        folded_path.write_text("", encoding="utf-8")
+        return 0
+
+    starts: dict[float, list[dict[str, Any]]] = {}
+    ends: dict[float, list[dict[str, Any]]] = {}
+    for event in events:
+        starts.setdefault(event["start"], []).append(event)
+        ends.setdefault(event["end"], []).append(event)
+
+    boundaries = sorted(set(starts) | set(ends))
+    active: dict[int, dict[str, Any]] = {}
+    folded: dict[str, int] = {}
+    previous = boundaries[0]
+    for current in boundaries:
+        if current > previous and active:
+            ordered = sorted(
+                active.values(),
+                key=lambda event: (
+                    event["start"],
+                    -(event["end"] - event["start"]),
+                    event["id"],
+                ),
+            )
+            stack = ";".join(event["name"] for event in ordered)
+            weight_ns = max(1, int(round((current - previous) * 1000.0)))
+            folded[stack] = folded.get(stack, 0) + weight_ns
+
+        for event in ends.get(current, []):
+            active.pop(event["id"], None)
+        for event in starts.get(current, []):
+            active[event["id"]] = event
+        previous = current
+
+    if not folded and events:
+        for event in events:
+            weight_ns = max(1, int(round((event["end"] - event["start"]) * 1000.0)))
+            folded[event["name"]] = folded.get(event["name"], 0) + weight_ns
+
+    with folded_path.open("w", encoding="utf-8") as output:
+        for stack, weight in sorted(folded.items()):
+            output.write(f"{stack} {weight}\n")
+    return len(folded)
+
+
+def generate_trace_flamegraph(trace_path: Path, output_dir: Path, stem: str) -> dict[str, Any]:
+    folded = output_dir / f"{stem}.trace.folded"
+    stack_count = trace_events_to_folded(trace_path, folded)
+
+    artifact: dict[str, Any] = {
+        "trace_folded": str(folded),
+        "trace_folded_stack_count": stack_count,
+    }
+    flamegraph = shutil.which("flamegraph.pl")
+    if flamegraph is None:
+        artifact["trace_flamegraph_available"] = False
+        artifact["trace_flamegraph_reason"] = "flamegraph.pl was not found on PATH."
+        return artifact
+
+    svg = output_dir / f"{stem}.trace-flamegraph.svg"
+    result = run_command(
+        [
+            flamegraph,
+            "--title",
+            f"MattSQL {stem} function trace",
+            "--subtitle",
+            "Perfetto complete-event durations",
+            str(folded),
+        ],
+        stdout_path=svg,
+    )
+    artifact["trace_flamegraph_svg"] = str(svg)
+    artifact["trace_flamegraph_returncode"] = result.returncode
+    artifact["trace_flamegraph_available"] = result.returncode == 0
+    if result.returncode != 0:
+        artifact["trace_flamegraph_reason"] = "flamegraph.pl failed."
+    return artifact
 
 
 def collect_perf_flamegraph(
@@ -212,6 +312,17 @@ def write_readme(output_dir: Path, artifacts: list[dict[str, Any]]) -> None:
         if "trace" in artifact:
             lines.append(f"- Trace: `{Path(artifact['trace']).name}`")
             lines.append(f"- Benchmark JSON: `{Path(artifact['results']).name}`")
+            if artifact.get("trace_folded"):
+                lines.append(f"- Trace folded stacks: `{Path(artifact['trace_folded']).name}`")
+            if artifact.get("trace_flamegraph_available"):
+                lines.append(
+                    f"- Trace flame graph: `{Path(artifact['trace_flamegraph_svg']).name}`"
+                )
+            elif artifact.get("trace_flamegraph_reason"):
+                lines.append(
+                    f"- Trace flame graph unavailable: "
+                    f"{artifact.get('trace_flamegraph_reason', '')}"
+                )
             if artifact.get("returncode") != 0:
                 lines.append(f"- Trace run failed with code `{artifact['returncode']}`")
         if artifact.get("requested"):

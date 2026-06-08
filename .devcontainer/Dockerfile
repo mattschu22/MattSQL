@@ -17,6 +17,7 @@ RUN apt-get update \
         git \
         heaptrack \
         less \
+        linux-tools-generic \
         lldb \
         ninja-build \
         pkg-config \
@@ -25,7 +26,10 @@ RUN apt-get update \
         python3-venv \
         valgrind \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth=1 https://github.com/brendangregg/FlameGraph /opt/flamegraph \
+    && ln -s /opt/flamegraph/flamegraph.pl /usr/local/bin/flamegraph.pl \
+    && ln -s /opt/flamegraph/stackcollapse-perf.pl /usr/local/bin/stackcollapse-perf.pl
 
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo

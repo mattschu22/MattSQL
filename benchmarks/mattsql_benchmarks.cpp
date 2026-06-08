@@ -1,6 +1,7 @@
 #include "mattsql/binder/default_binder.hpp"
 #include "mattsql/catalog/in_memory_catalog.hpp"
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 #include "mattsql/lexer/lexer.hpp"
 #include "mattsql/optimizer/default_optimizer.hpp"
 #include "mattsql/parser/parser.hpp"
@@ -276,6 +277,15 @@ private:
 
 TraceRecorder *active_trace = nullptr;
 
+void RecordMattsqlTrace(const char *name, const char *category,
+                        mattsql::TraceClock::time_point start,
+                        mattsql::TraceClock::time_point end, void *context) {
+  auto *trace = static_cast<TraceRecorder *>(context);
+  if (trace != nullptr) {
+    trace->Record(name, category, start, end);
+  }
+}
+
 template <typename Callable>
 decltype(auto) WithTrace(std::string_view name, std::string_view category,
                          Callable &&callable) {
@@ -303,7 +313,7 @@ BenchmarkResult RunBenchmark(const BenchmarkDefinition &benchmark,
 
   for (std::size_t index = 0; index < warmups; ++index) {
     const auto phase = benchmark.name + ".warmup";
-    WithTrace(phase, "benchmark", [&] { benchmark.body(); });
+    WithTrace(phase, "benchmark.iteration", [&] { benchmark.body(); });
   }
 
   std::vector<std::uint64_t> samples;
@@ -311,7 +321,7 @@ BenchmarkResult RunBenchmark(const BenchmarkDefinition &benchmark,
   for (std::size_t index = 0; index < iterations; ++index) {
     const auto phase = benchmark.name + ".sample";
     const auto start = Clock::now();
-    WithTrace(phase, "benchmark", [&] { benchmark.body(); });
+    WithTrace(phase, "benchmark.iteration", [&] { benchmark.body(); });
     const auto end = Clock::now();
     samples.push_back(DurationNanos(start, end));
   }
@@ -520,11 +530,9 @@ BenchmarkDefinition MakeParserBenchmark() {
         std::uint64_t parsed = 0;
         for (const auto &sql : *corpus) {
           mattsql::Lexer lexer(sql);
-          auto tokens = WithTrace("lexer_tokenize", "frontend",
-                                  [&] { return lexer.Tokenize(); });
+          auto tokens = lexer.Tokenize();
           mattsql::Parser parser(std::move(tokens));
-          auto statement = WithTrace("parse_statement", "frontend",
-                                     [&] { return parser.ParseStatement(); });
+          auto statement = parser.ParseStatement();
           Consume(reinterpret_cast<std::uintptr_t>(statement.get()));
           ++parsed;
         }
@@ -542,34 +550,25 @@ BenchmarkDefinition MakeFrontendPipelineBenchmark() {
       [corpus, catalog] {
         std::uint64_t planned = 0;
         for (const auto &sql : *corpus) {
-          auto statement = WithTrace("parse_statement", "frontend", [&] {
-            mattsql::Lexer lexer(sql);
-            mattsql::Parser parser(lexer.Tokenize());
-            return parser.ParseStatement();
-          });
+          mattsql::Lexer lexer(sql);
+          mattsql::Parser parser(lexer.Tokenize());
+          auto statement = parser.ParseStatement();
 
           mattsql::DefaultBinder binder;
-          auto bound = WithTrace("bind_statement", "frontend", [&] {
-            return TakeOk(binder.Bind(*statement, *catalog), "bind benchmark SQL");
-          });
+          auto bound = TakeOk(binder.Bind(*statement, *catalog),
+                              "bind benchmark SQL");
 
           mattsql::DefaultLogicalPlanner logical_planner;
-          auto logical = WithTrace("logical_plan", "frontend", [&] {
-            return TakeOk(logical_planner.Plan(*bound),
-                          "logical plan benchmark SQL");
-          });
+          auto logical = TakeOk(logical_planner.Plan(*bound),
+                                "logical plan benchmark SQL");
 
           mattsql::DefaultOptimizer optimizer;
-          auto optimized = WithTrace("optimize_logical_plan", "frontend", [&] {
-            return TakeOk(optimizer.Optimize(std::move(logical)),
-                          "optimize benchmark SQL");
-          });
+          auto optimized = TakeOk(optimizer.Optimize(std::move(logical)),
+                                  "optimize benchmark SQL");
 
           mattsql::DefaultPhysicalPlanner physical_planner;
-          auto physical = WithTrace("physical_plan", "frontend", [&] {
-            return TakeOk(physical_planner.Plan(*optimized),
-                          "physical plan benchmark SQL");
-          });
+          auto physical = TakeOk(physical_planner.Plan(*optimized),
+                                 "physical plan benchmark SQL");
 
           Consume(static_cast<std::uint64_t>(physical->Kind()));
           ++planned;
@@ -595,9 +594,7 @@ BenchmarkDefinition MakeEngineSelectBenchmark() {
       [engine, queries] {
         std::uint64_t rows = 0;
         for (const auto &sql : *queries) {
-          auto result = WithTrace("execute_select_query", "engine", [&] {
-            return ExecuteQuery(*engine, sql);
-          });
+          auto result = ExecuteQuery(*engine, sql);
           rows += result.rows.size();
           rows += result.columns.size();
         }
@@ -618,11 +615,11 @@ BenchmarkDefinition MakeEngineInsertBenchmark() {
       12U,
       [inserts] {
         mattsql::DefaultSqlEngine engine;
-        WithTrace("create_insert_table", "engine", [&] {
+        WithTrace("engine_insert_create_table", "benchmark.batch", [&] {
           ExecuteOk(engine,
                     "CREATE TABLE fuzz (id INT, name TEXT, active BOOL, score INT);");
         });
-        WithTrace("insert_values_rows", "engine", [&] {
+        WithTrace("engine_insert_values_batch", "benchmark.batch", [&] {
           for (const auto &sql : *inserts) {
             ExecuteOk(engine, sql);
           }
@@ -648,7 +645,7 @@ BenchmarkDefinition MakeTupleCodecBenchmark() {
       [schema, rows] {
         mattsql::BinaryTupleCodec codec;
         std::uint64_t value_count = 0;
-        WithTrace("encode_decode_tuples", "storage", [&] {
+        WithTrace("tuple_codec_batch", "benchmark.batch", [&] {
           for (const auto &row : *rows) {
             auto tuple = TakeOk(codec.Encode(*schema, row), "encode benchmark tuple");
             auto decoded = TakeOk(
@@ -684,7 +681,7 @@ BenchmarkDefinition MakeSlottedPageBenchmark() {
         header.page_id = mattsql::PageId{7};
         std::vector<std::byte> page_bytes(mattsql::kDefaultPageSize);
         mattsql::DefaultSlottedPage page;
-        WithTrace("initialize_slotted_page", "storage", [&] {
+        WithTrace("slotted_page_initialize_batch", "benchmark.batch", [&] {
           RequireOk(page.Initialize(
                         mattsql::PageView{
                             &header,
@@ -696,7 +693,7 @@ BenchmarkDefinition MakeSlottedPageBenchmark() {
 
         std::vector<mattsql::SlotId> slots;
         slots.reserve(records->size());
-        WithTrace("slotted_page_insert_records", "storage", [&] {
+        WithTrace("slotted_page_insert_batch", "benchmark.batch", [&] {
           for (const auto &record : *records) {
             auto slot = TakeOk(
                 page.Insert(mattsql::PageView{
@@ -711,7 +708,7 @@ BenchmarkDefinition MakeSlottedPageBenchmark() {
         });
 
         std::uint64_t bytes_read = 0;
-        WithTrace("slotted_page_read_records", "storage", [&] {
+        WithTrace("slotted_page_read_batch", "benchmark.batch", [&] {
           for (const auto slot : slots) {
             auto record = TakeOk(
                 page.Read(mattsql::ConstPageView{
@@ -724,7 +721,7 @@ BenchmarkDefinition MakeSlottedPageBenchmark() {
           }
         });
 
-        WithTrace("slotted_page_delete_records", "storage", [&] {
+        WithTrace("slotted_page_delete_batch", "benchmark.batch", [&] {
           for (std::size_t index = 0; index < slots.size(); index += 4U) {
             RequireOk(page.Delete(
                           mattsql::PageView{
@@ -736,10 +733,11 @@ BenchmarkDefinition MakeSlottedPageBenchmark() {
           }
         });
 
-        Consume(bytes_read + page.FreeSpace(mattsql::ConstPageView{
-                                 &header,
-                                 mattsql::ConstBufferView{std::span<const std::byte>(
-                                     page_bytes.data(), page_bytes.size())}}));
+        auto free_space = page.FreeSpace(mattsql::ConstPageView{
+            &header,
+            mattsql::ConstBufferView{std::span<const std::byte>(
+                page_bytes.data(), page_bytes.size())}});
+        Consume(bytes_read + free_space);
       }};
 }
 
@@ -763,18 +761,18 @@ BenchmarkDefinition MakePageHeapBenchmark() {
         BenchmarkTransaction transaction;
         mattsql::PageHeapTable heap(mattsql::PageId{10});
 
-        WithTrace("page_heap_insert_records", "storage", [&] {
+        WithTrace("page_heap_insert_batch", "benchmark.batch", [&] {
           for (const auto &record : *records) {
             (void)TakeOk(heap.Insert(transaction,
                                      mattsql::ConstBufferView{
-                                         std::span<const std::byte>(record.data(),
-                                                                    record.size())}),
+                                         std::span<const std::byte>(
+                                             record.data(), record.size())}),
                          "insert heap record");
           }
         });
 
         std::uint64_t scanned_bytes = 0;
-        WithTrace("page_heap_scan_records", "storage", [&] {
+        WithTrace("page_heap_scan_batch", "benchmark.batch", [&] {
           auto cursor = TakeOk(heap.Scan(transaction), "open heap scan");
           while (true) {
             auto record = cursor->Next();
@@ -799,7 +797,7 @@ BenchmarkDefinition MakeRuntimeBenchmark() {
       [] {
         mattsql::HostedPlatformRuntime runtime;
         std::uint64_t nanos = 0;
-        WithTrace("runtime_allocate_pages_and_time", "runtime", [&] {
+        WithTrace("runtime_allocate_pages_and_time", "benchmark.batch", [&] {
           for (std::size_t index = 0; index < 64U; ++index) {
             auto allocation = TakeOk(
                 runtime.AllocatePageSpan(1U, mattsql::kDefaultPageSize,
@@ -830,18 +828,19 @@ BenchmarkDefinition MakeSqlLogicCorpusBenchmark() {
       20U,
       [queries] {
         mattsql::DefaultSqlEngine engine;
-        WithTrace("sql_logic_setup_table", "sql_logic", [&] {
+        WithTrace("sql_logic_setup_table", "benchmark.batch", [&] {
           ExecuteOk(engine,
                     "CREATE TABLE fuzz (id INT, name TEXT, active BOOL, score INT);");
         });
-        WithTrace("sql_logic_insert_rows", "sql_logic", [&] {
+        WithTrace("sql_logic_insert_rows", "benchmark.batch", [&] {
           for (std::size_t row_index = 0; row_index < 96U; ++row_index) {
-            ExecuteOk(engine, InsertSql(row_index));
+            const auto sql = InsertSql(row_index);
+            ExecuteOk(engine, sql);
           }
         });
 
         std::uint64_t row_total = 0;
-        WithTrace("sql_logic_query_corpus", "sql_logic", [&] {
+        WithTrace("sql_logic_query_corpus", "benchmark.batch", [&] {
           for (std::size_t repeat = 0; repeat < 4U; ++repeat) {
             for (const auto &query : *queries) {
               auto result = ExecuteQuery(engine, query);
@@ -948,6 +947,7 @@ int main(int argc, char **argv) {
     if (options.trace_json_path.has_value()) {
       trace.emplace();
       active_trace = &*trace;
+      mattsql::SetTraceSink(&RecordMattsqlTrace, &*trace);
     }
 
     std::vector<BenchmarkResult> results;
@@ -980,6 +980,7 @@ int main(int argc, char **argv) {
     }
 
     if (options.trace_json_path.has_value()) {
+      mattsql::ClearTraceSink();
       active_trace = nullptr;
       trace->WriteJson(*options.trace_json_path);
     }

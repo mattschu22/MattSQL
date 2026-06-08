@@ -1,6 +1,7 @@
 #include "mattsql/execution/default_executor.hpp"
 
 #include "mattsql/common/result_utils.hpp"
+#include "mattsql/common/trace.hpp"
 #include "mattsql/common/value_utils.hpp"
 #include "mattsql/execution/expressions/evaluator.hpp"
 #include "mattsql/planner/plan_utils.hpp"
@@ -56,6 +57,7 @@ public:
         transaction_(transaction) {}
 
   Result<QueryResult> Execute(const PhysicalPlan &plan) {
+    ScopedTrace trace("mattsql::ExecutionDriver::Execute", "function.execution");
     auto result = execute_plan(plan);
     if (!result.ok()) {
       return error_result<QueryResult>(std::move(result.status));
@@ -66,6 +68,8 @@ public:
 
 private:
   Result<ExecutionResult> execute_plan(const PhysicalPlan &plan) {
+    ScopedTrace trace("mattsql::ExecutionDriver::execute_plan",
+                      "function.execution");
     if (const auto *create = dynamic_cast<const PhysicalCreateTable *>(&plan)) {
       return execute_create_table(*create);
     }
@@ -90,6 +94,8 @@ private:
   }
 
   Result<ExecutionResult> execute_create_table(const PhysicalCreateTable &plan) {
+    ScopedTrace trace("mattsql::ExecutionDriver::execute_create_table",
+                      "function.execution");
     const auto child_status =
         RequireLeaf(plan, "CREATE TABLE", ErrorCode::ExecutionError);
     if (!status_ok(child_status)) {
@@ -126,6 +132,8 @@ private:
   }
 
   Result<ExecutionResult> execute_insert(const PhysicalInsert &plan) {
+    ScopedTrace trace("mattsql::ExecutionDriver::execute_insert",
+                      "function.execution");
     const auto child_status =
         RequireChildCount(plan, 1, "INSERT", ErrorCode::ExecutionError);
     if (!status_ok(child_status)) {
@@ -173,6 +181,8 @@ private:
   }
 
   Result<ExecutionResult> execute_projection(const PhysicalProjection &plan) {
+    ScopedTrace trace("mattsql::ExecutionDriver::execute_projection",
+                      "function.execution");
     const auto child_status =
         RequireChildCount(plan, 1, "projection", ErrorCode::ExecutionError);
     if (!status_ok(child_status)) {
@@ -231,6 +241,8 @@ private:
   }
 
   Result<ExecutionResult> execute_filter(const PhysicalFilter &plan) {
+    ScopedTrace trace("mattsql::ExecutionDriver::execute_filter",
+                      "function.execution");
     const auto child_status =
         RequireChildCount(plan, 1, "filter", ErrorCode::ExecutionError);
     if (!status_ok(child_status)) {
@@ -269,6 +281,8 @@ private:
   }
 
   Result<ExecutionResult> execute_values(const PhysicalValues &plan) {
+    ScopedTrace trace("mattsql::ExecutionDriver::execute_values",
+                      "function.execution");
     const auto child_status = RequireLeaf(plan, "VALUES", ErrorCode::ExecutionError);
     if (!status_ok(child_status)) {
       return error_result<ExecutionResult>(child_status);
@@ -288,6 +302,8 @@ private:
   }
 
   Result<ExecutionResult> execute_seq_scan(const PhysicalSeqScan &plan) {
+    ScopedTrace trace("mattsql::ExecutionDriver::execute_seq_scan",
+                      "function.execution");
     const auto child_status = RequireLeaf(plan, "SeqScan", ErrorCode::ExecutionError);
     if (!status_ok(child_status)) {
       return error_result<ExecutionResult>(child_status);
@@ -353,6 +369,7 @@ DefaultExecutor::DefaultExecutor(Catalog &catalog, TableStorageManager &storage,
 
 Result<QueryResult> DefaultExecutor::Execute(const PhysicalPlan &plan,
                                              Transaction &transaction) {
+  ScopedTrace trace("mattsql::DefaultExecutor::Execute", "function.execution");
   const auto active_status = require_active(transaction);
   if (!status_ok(active_status)) {
     return error_result<QueryResult>(active_status);
